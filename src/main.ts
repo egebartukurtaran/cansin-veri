@@ -501,6 +501,7 @@ function render() {
     h(
       'header',
       {},
+      h('div', { class: 'hero' }, 'Cansın ', h('span', { class: 'heart' }, '❤️')),
       h('h1', {}, 'Rapor → SPSS Listesi'),
       h('p', {}, 'Laboratuvar ve eko PDF’lerindeki değerleri araştırma listesine aktarır. Dosyalar bilgisayarınızdan çıkmaz.'),
     ),

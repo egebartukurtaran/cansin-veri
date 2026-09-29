@@ -73,10 +73,6 @@ const COMORBIDITY_FLAGS: [string, RegExp][] = [
 const RULES: Rule[] = [
   { test: /^eko\s*:?\s*$/i, apply: () => {} },
   {
-    test: /^ya[şs]\s*[:=]?\s*(\d+)\s*$/i,
-    apply: (m, emit, line) => emit(DEMOGRAPHIC_COLUMNS.age, Number(m[1]), 'Yaş', line),
-  },
-  {
     test: /^ef\s*[:=]?\s*%?\s*(\d+(?:[.,]\d+)?)\s*%?\s*$/i,
     apply: numberRule(ECHO_COLUMNS.ef, 'Ef'),
   },
@@ -190,12 +186,70 @@ function tryColumn(line: string, columns: Map<string, string>, emit: Emit): bool
   return true;
 }
 
-const FILE_NO = /^(?:dosya|protokol)\s*(?:no|numarası|numarasi)?\.?\s*[:=]?\s*(\d+)\s*$/i;
-const SEX = /^(?:cinsiyet(?:i)?\s*[:=]?\s*)?(kadın|kadin|erkek|k|e)\s*$/i;
-const STARTS_PATIENT = [FILE_NO, /^ya[şs]\s*[:=]?\s*\d+/i];
+const FILE_NO = /^(?:dosya|protokol)\s*(?:no|numarası|numarasi)?\.?\s*[:=\-–]?\s*(\d+)\s*$/i;
+
+const SEX_WORD = '(kadın|kadin|bayan|erkek|bay)';
+const AGE_WORD = '(?:yaş(?:ında|inda)?|yas|yıl|y)';
+const AGE_LABEL = new RegExp(`^ya[şs]\\s*[:=\\-–]?\\s*(\\d{1,3})\\s*${AGE_WORD}?$`);
+const AGE_NUMBER = new RegExp(`^(\\d{1,3})\\s*${AGE_WORD}$`);
+const SEX_ONLY = new RegExp(`^(?:cinsiyet(?:i)?\\s*[:=\\-–]?\\s*)?(${SEX_WORD.slice(1, -1)}|k|e)(?:\\s+hasta)?$`);
+const SEX_ANY = '(kadın|kadin|bayan|erkek|bay|k|e)';
+const AGE_SEX = new RegExp(`^(\\d{1,3})\\s*${AGE_WORD}?\\s+${SEX_ANY}(?:\\s+hasta)?$`);
+const SEX_AGE = new RegExp(`^${SEX_ANY}(?:\\s+hasta)?\\s*,?\\s*(\\d{1,3})\\s*${AGE_WORD}?$`);
+
+const sexCode = (w: string): 1 | 2 => (/^(k|bayan)/.test(w) ? 1 : 2);
+
+/**
+ * Reads a line that contains only age and/or sex, in the usual ways of writing it:
+ * "Yaş: 60", "Yaş - 60" (table), "60 yaşında", "kadın", "Cinsiyet: K", "60 yaşında kadın hasta",
+ * "60/K", "Kadın, 60". Returns null if the line has anything else in it.
+ */
+export function parseAgeSex(line: string): { age?: number; sex?: 1 | 2 } | null {
+  const t = lower(line).replace(/\s+/g, ' ').trim().replace(/[.]$/, '');
+  const parts = t.split(/\s*[,;/|]\s*/).filter((x) => x !== '');
+  if (parts.length === 0) return null;
+  const out: { age?: number; sex?: 1 | 2 } = {};
+  for (const part of parts) {
+    let m: RegExpExecArray | null;
+    if ((m = AGE_LABEL.exec(part) ?? AGE_NUMBER.exec(part))) out.age = Number(m[1]);
+    else if ((m = SEX_ONLY.exec(part))) out.sex = sexCode(m[1]);
+    else if ((m = AGE_SEX.exec(part))) {
+      out.age = Number(m[1]);
+      out.sex = sexCode(m[2]);
+    } else if ((m = SEX_AGE.exec(part))) {
+      out.sex = sexCode(m[1]);
+      out.age = Number(m[2]);
+    } else if (/^\d{1,3}$/.test(part) && parts.length > 1) out.age = Number(part);
+    else return null;
+  }
+  if (out.age !== undefined && (out.age < 0 || out.age > 120)) return null;
+  return out.age !== undefined || out.sex !== undefined ? out : null;
+}
+
+/** "AD SOYAD, 60, K" / "AD SOYAD (60 yaş kadın)" → name + age/sex. */
+function splitNameLine(line: string): { name: string; info: { age?: number; sex?: 1 | 2 } | null } {
+  const paren = /^(.*?\S)\s*\(([^)]*)\)\s*$/.exec(line);
+  if (paren) {
+    const info = parseAgeSex(paren[2]);
+    if (info) return { name: paren[1], info };
+  }
+  const parts = line.split(/\s*[,;]\s*/);
+  for (let i = 1; i < parts.length; i++) {
+    const info = parseAgeSex(parts.slice(i).join(', '));
+    if (info) return { name: parts.slice(0, i).join(', '), info };
+  }
+  const tail = /^(.*?\D)\s+(\d{1,3}\s*\S*(?:\s+\S+)?)$/.exec(line);
+  if (tail) {
+    const info = parseAgeSex(tail[2]);
+    if (info?.age !== undefined) return { name: tail[1].trim(), info };
+  }
+  return { name: line, info: null };
+}
+
+const isPatientHeader = (line: string) => FILE_NO.test(line) || parseAgeSex(line) !== null;
 
 function isHeaderLike(line: string) {
-  return FILE_NO.test(line) || STARTS_PATIENT.some((r) => r.test(line)) || SEX.test(line);
+  return isPatientHeader(line);
 }
 
 function isKnown(line: string, columns: Map<string, string>): boolean {
@@ -219,7 +273,8 @@ function splitPatients(lines: string[], columns: Map<string, string>): { name: s
     const line = lines[i];
     const next = lines[i + 1];
     const startsBlock =
-      !isKnown(line, columns) && next !== undefined && STARTS_PATIENT.some((r) => r.test(next));
+      !isKnown(line, columns) &&
+      ((next !== undefined && isPatientHeader(next)) || splitNameLine(line).info?.age !== undefined);
     if (startsBlock || (current === null && !isKnown(line, columns))) {
       current = { name: line, body: [] };
       blocks.push(current);
@@ -235,11 +290,22 @@ export function parseWordLines(rawLines: string[], fileName: string, columnNames
   const lines = rawLines.map(normalizeName).filter((l) => l !== '');
 
   return splitPatients(lines, columns).map(({ name, body }) => {
-    const patient: PatientInfo = { name: name.toLocaleUpperCase('tr'), fileNo: '', birth: null, sex: null };
+    const head = splitNameLine(name);
+    const patient: PatientInfo = { name: head.name.toLocaleUpperCase('tr'), fileNo: '', birth: null, sex: null };
     const observations: Observation[] = [];
     const unrecognized: string[] = [];
     const emit: Emit = (column, value, source, raw, warning) =>
       observations.push({ column, value, raw, source, warnings: warning ? [warning] : [] });
+    const ages = new Set<number>();
+    const sexes = new Set<1 | 2>();
+    const takeInfo = (info: { age?: number; sex?: 1 | 2 }, line: string) => {
+      if (info.age !== undefined) {
+        ages.add(info.age);
+        emit(DEMOGRAPHIC_COLUMNS.age, info.age, 'Yaş', line);
+      }
+      if (info.sex !== undefined) sexes.add(info.sex);
+    };
+    if (head.info) takeInfo(head.info, name);
 
     for (const line of body) {
       const fileNo = FILE_NO.exec(line);
@@ -247,9 +313,9 @@ export function parseWordLines(rawLines: string[], fileName: string, columnNames
         patient.fileNo = fileNo[1];
         continue;
       }
-      const sex = SEX.exec(line);
-      if (sex) {
-        patient.sex = lower(sex[1]).startsWith('k') ? 1 : 2;
+      const info = parseAgeSex(line);
+      if (info) {
+        takeInfo(info, line);
         continue;
       }
       if (tryLab(line, emit)) continue;
@@ -260,6 +326,14 @@ export function parseWordLines(rawLines: string[], fileName: string, columnNames
       }
       if (tryColumn(line, columns, emit)) continue;
       unrecognized.push(line);
+    }
+    if (sexes.size === 1) patient.sex = [...sexes][0];
+    else if (sexes.size > 1) {
+      emit(DEMOGRAPHIC_COLUMNS.sex, null, 'Cinsiyet', 'kadın / erkek', 'Word’de hem kadın hem erkek yazıyor, yazılmadı');
+    }
+    if (ages.size > 1) {
+      // Several different ages for one patient: keep them all so the merge reports a conflict.
+      for (const o of observations) if (o.column === DEMOGRAPHIC_COLUMNS.age) o.warnings.push('Word’de farklı yaşlar var');
     }
     return { kind: 'word', fileName, patient, date: null, observations, unrecognized };
   });

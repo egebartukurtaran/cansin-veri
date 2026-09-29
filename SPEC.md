@@ -67,8 +67,7 @@ Hasta bloğu: **ad soyad satırı**, hemen altında `Dosya No: ...` veya `Yaş: 
 | Satır | Kolon | Kural |
 |---|---|---|
 | `Dosya No: 1234567` | eşleştirme | İsteğe bağlı. Yoksa hasta **listedeki isimle** (büyük/küçük harf duyarsız) eşleştirilir; isim listede tek değilse veya yoksa hiçbir şey yazılmaz. Dosya No'suz yeni hasta eklenmez. |
-| `Yaş: 60` | `Yaş` | doğrudan |
-| `kadın` / `erkek` | `CinsiyetK1E2` | 1 / 2 |
+| `Yaş: 60`, `Yaş - 60`, `60 yaşında`, `60 yaşında kadın hasta`, `60/K`, `Kadın, 60` | `Yaş`, `CinsiyetK1E2` | Yaş doğrudan; kadın/bayan/K → 1, erkek/bay/E → 2. Ad satırında da olabilir: `AD SOYAD, 60, K` / `AD SOYAD (60 yaş kadın)`. Aynı notta hem kadın hem erkek varsa yazılmaz. |
 | `<Test Adı> - <değer> <birim>` | §5.2 | Test adı PDF'lerle aynı, **tam eşleşme**; `<`/`>` yazılmaz |
 | `Ef: 60` | `EFyüzde` | |
 | `Kapak patolojisi yok` / `var: eser MY` | `Kapak_patolojisi`, `Kapak_patolojisi_tipi` | yok → 0 ve tipi `"0"`; var → 1 ve tipi = açıklama |

@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vitest';
 import { applyPlan, buildPlan, findColumn, summarize, type Plan } from '../src/merge';
 import { readSav, type SavFile } from '../src/sav/sav';
 import { documentLines, readDocxLines } from '../src/word/docx';
-import { parseTypedNumber, parseWordLines, parseYesNo } from '../src/word/notes';
+import { parseAgeSex, parseTypedNumber, parseWordLines, parseYesNo } from '../src/word/notes';
 import { fixture, hasFixtures, patient } from './helpers';
 
 const COLUMNS = [
@@ -80,6 +80,70 @@ describe('word notes', () => {
     );
     expect(reps.map((r) => [r.patient.name, r.patient.fileNo])).toEqual([['HASTA BİR', '1111111'], ['HASTA İKİ', '']]);
     expect(reps[1].observations.find((o) => o.column === 'Kre')!.value).toBe(2.2);
+  });
+
+  test('age and sex written in different ways', () => {
+    const cases: [string, { age?: number; sex?: 1 | 2 }][] = [
+      ['Yaş: 60', { age: 60 }],
+      ['YAŞ : 60 yıl', { age: 60 }],
+      ['Yas 60', { age: 60 }],
+      ['Yaş - 60', { age: 60 }],
+      ['60 yaşında', { age: 60 }],
+      ['kadın', { sex: 1 }],
+      ['KADIN', { sex: 1 }],
+      ['Erkek', { sex: 2 }],
+      ['Cinsiyet: K', { sex: 1 }],
+      ['Cinsiyet - Erkek', { sex: 2 }],
+      ['Cinsiyeti: kadın', { sex: 1 }],
+      ['60 yaşında kadın hasta', { age: 60, sex: 1 }],
+      ['60 yaş erkek', { age: 60, sex: 2 }],
+      ['60/K', { age: 60, sex: 1 }],
+      ['60 K', { age: 60, sex: 1 }],
+      ['Kadın, 60', { age: 60, sex: 1 }],
+      ['Yaş: 60, Cinsiyet: Erkek', { age: 60, sex: 2 }],
+      ['bayan', { sex: 1 }],
+    ];
+    for (const [line, want] of cases) expect(parseAgeSex(line), line).toEqual(want);
+    for (const line of ['e/a 1den büyük', 'Kreatinin - 1,25', 'Ef: 60', 'Ofis Ta: 145 (skb) /85 (dkb)', 'Yaş: 300', 'kbh süresi: 7']) {
+      expect(parseAgeSex(line), line).toBeNull();
+    }
+  });
+
+  test('age and sex in the patient block and on the name line', () => {
+    const one = (lines: string[]) => parseWordLines(lines, 'x.docx', COLUMNS);
+    const get = (lines: string[]) => {
+      const reps = one(lines);
+      expect(reps).toHaveLength(1);
+      const r = reps[0];
+      return { name: r.patient.name, sex: r.patient.sex, age: r.observations.find((o) => o.column === 'Yaş')?.value };
+    };
+    expect(get(['AYŞE YILDIZ', '60 yaşında kadın hasta', 'Kreatinin - 1,1'])).toEqual({ name: 'AYŞE YILDIZ', sex: 1, age: 60 });
+    expect(get(['AYŞE YILDIZ', 'Cinsiyet: Kadın', 'Yaş: 60'])).toEqual({ name: 'AYŞE YILDIZ', sex: 1, age: 60 });
+    expect(get(['AYŞE YILDIZ, 60, K', 'Kreatinin - 1,1'])).toEqual({ name: 'AYŞE YILDIZ', sex: 1, age: 60 });
+    expect(get(['AYŞE YILDIZ (60 yaş kadın)', 'Kreatinin - 1,1'])).toEqual({ name: 'AYŞE YILDIZ', sex: 1, age: 60 });
+    expect(get(['AYŞE YILDIZ 60 K', 'Kreatinin - 1,1'])).toEqual({ name: 'AYŞE YILDIZ', sex: 1, age: 60 });
+    // Table layout: "Yaş | 60" rows become "Yaş - 60".
+    expect(get(['AYŞE YILDIZ', 'Yaş - 60', 'Cinsiyet - Kadın'])).toEqual({ name: 'AYŞE YILDIZ', sex: 1, age: 60 });
+
+    // Several patients, each starting with name + age/sex line.
+    const reps = one(['HASTA BİR', 'erkek', 'Yaş: 70', 'Kreatinin - 1,1', 'HASTA İKİ, 65, K', 'Kreatinin - 2,2']);
+    expect(reps.map((r) => [r.patient.name, r.patient.sex])).toEqual([['HASTA BİR', 2], ['HASTA İKİ', 1]]);
+  });
+
+  test('age and sex reach the list for a new patient and a matched one', () => {
+    const sav = fakeSav([{ Adsoyad: 'AYŞE YILDIZ', DosyaNo: '555' }]);
+    const plan = buildPlan(sav, [
+      ...parseWordLines(['AYŞE YILDIZ', '60 yaşında kadın hasta'], 'a.docx', COLUMNS),
+      ...parseWordLines(['MEHMET KAYA', 'Dosya No: 777', 'Erkek, 70'], 'b.docx', COLUMNS),
+    ]);
+    const rows = applyPlan(sav, plan).rows;
+    expect(rows[0].slice(0, 4)).toEqual(['AYŞE YILDIZ', '555', 1, 60]);
+    expect(rows[1].slice(0, 4)).toEqual(['MEHMET KAYA', '777', 2, 70]);
+  });
+
+  test('contradicting sex in one note is not written', () => {
+    const [r] = parseWordLines(['AYŞE YILDIZ', 'Yaş: 60', 'kadın', 'erkek'], 'x.docx', COLUMNS);
+    expect(r.patient.sex).toBeNull();
   });
 
   test('helpers', () => {
