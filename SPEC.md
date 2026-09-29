@@ -84,7 +84,7 @@ Hasta bloğu `Ad soyad: ...` satırıyla (veya tek başına ad satırı + altın
 | Satır | Kolon | Kural |
 |---|---|---|
 | `78 yaş erkek`, `Yaş: 60`, `Yaş - 60`, `60/K`, `Cinsiyet: Kadın`, ad satırında `AD SOYAD, 60, K` | `Yaş`, `CinsiyetK1E2` | kadın/bayan/K → 1, erkek/bay/E → 2; çelişen cinsiyet yazılmaz |
-| `<Test Adı> - <değer> <birim>` | §5.2 | Tam eşleşme (`HCO3 -(Venöz)`, `cHCO3(Pst)c (Venöz)` → HCO3); `<`/`>` yazılmaz |
+| `<Test Adı> - <değer> <birim>` | §5.2 | Tam eşleşme (yalnızca tire etrafındaki boşluk önemsiz). Ek adlar: `HCO3 -(Venöz)`, `cHCO3(Pst)c (Venöz)` → HCO3; `Albümin- idrar` → Spotidraralbuminüri. `Protein (24 Saatlik İdrar)` yazılmaz (kolonu yok). `<`/`>` yazılmaz |
 | Serbest eko metni | `EFyüzde`, `TAPSE`, `VCI_çapı_ekspiryum`, `pab`, `Sol_atriyum_çapı`, `VCI_kollabe` | Satırdaki **tüm** değerler okunur (`EF: % 55`, `TAPSE 23 mm`, `IVC 19 mm`, `Pab 30`, `%50den fazla/az kollabe`) |
 | `... konsantrik hipertrofik`, `hipertrofi yok` | `Sol_ventrikül_hipertrofisi` | var/yok **aynı cümle içinde** değerlendirilir (başka cümledeki "yok" etkilemez); belirsizse yazılmaz |
 | `diyastolik disfonksiyon yok/var`, `Evre 1 diyastolik disfonksiyon` | `Diyastolik_disfonksiyon` | aynı kural |

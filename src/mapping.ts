@@ -42,6 +42,9 @@ export const LAB_MAPPING: LabMapping[] = [
   { test: 'cHCO3(Pst)c (Venöz)', column: 'HCO3' },
   { test: 'HCO3 -(Venöz)', column: 'HCO3' },
   { test: 'HCO3 (Venöz)', column: 'HCO3' },
+  // Hand-written in Word notes (same value as "Albümin / Kreatinin (Spot İdrar)").
+  { test: 'Albümin- idrar', column: 'Spotidraralbuminüri' },
+  { test: 'Albümin idrar', column: 'Spotidraralbuminüri' },
 ];
 
 /**
@@ -79,10 +82,12 @@ export function normalizeName(s: string): string {
   return s.normalize('NFC').replace(/\s+/g, ' ').trim();
 }
 
-const LAB_BY_TEST = new Map(LAB_MAPPING.map((m) => [normalizeName(m.test), m]));
+/** Exact test-name key; only the spacing around dashes is ignored ("Albümin- idrar" = "Albümin - idrar"). */
+const labKey = (s: string) => normalizeName(s).replace(/\s*([-–])\s*/g, '-');
+const LAB_BY_TEST = new Map(LAB_MAPPING.map((m) => [labKey(m.test), m]));
 
 export function findLabMapping(testName: string): LabMapping | undefined {
-  return LAB_BY_TEST.get(normalizeName(testName));
+  return LAB_BY_TEST.get(labKey(testName));
 }
 
 /** Every column the app may write — used to check that the list has them. */

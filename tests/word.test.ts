@@ -218,10 +218,10 @@ describe('word notes', () => {
       Kapak_patolojisi: 0, Kapak_patolojisi_tipi: '0', SKBmmHg: 116, DKBmmHg: 69, pretibial_odem: 1,
       Komorbidite: 'Tiroid ca', HTYok0Var1: 0,
     });
-    // Not written because unsure what they map to.
-    expect(reps[1].unrecognized).toContain('Albümin- idrar : 10');
+    expect(v(1).Spotidraralbuminüri).toBe(10); // "Albümin- idrar : 10"
+    // No column for 24-hour urine protein: not written.
     expect(reps[1].unrecognized).toContain('Protein (24 Saatlik İdrar) - 132,0 mg/24H');
-    expect(v(1).Spotidraralbuminüri).toBeUndefined();
+    expect(v(1).Spotidrarproteinüri).toBeUndefined();
   });
 
   test('free text: each value read, var/yok judged per sentence', () => {
@@ -271,6 +271,16 @@ describe('word notes', () => {
     expect(v(['eser my, 1-2 ty']).v).toEqual({ Kapak_patolojisi: 1, Kapak_patolojisi_tipi: 'eser my, 1-2 ty' });
     expect(v(['Kapak patoloji yok']).v).toEqual({ Kapak_patolojisi: 0, Kapak_patolojisi_tipi: '0' });
     expect(v(['komorbidte: : Tiroid ca']).v).toMatchObject({ Komorbidite: 'Tiroid ca' });
+  });
+
+  test('urine albumin written in different ways', () => {
+    for (const line of ['Albümin- idrar : 10', 'Albümin - idrar : 10', 'Albümin-idrar: 10', 'Albümin idrar - 10 mg/g']) {
+      const [r] = parseWordLines(['X Y', 'Yaş: 60', line], 'x.docx', COLUMNS);
+      expect(r.observations.find((o) => o.column === 'Spotidraralbuminüri')?.value, line).toBe(10);
+    }
+    // Serum albumin stays serum albumin.
+    const [r] = parseWordLines(['X Y', 'Yaş: 60', 'Albumin - 4,4 g/dL'], 'x.docx', COLUMNS);
+    expect(r.observations.find((o) => o.column === 'Alb')?.value).toBe(4.4);
   });
 
   test('helpers', () => {

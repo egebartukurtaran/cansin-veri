@@ -297,11 +297,19 @@ function scanText(line: string, emit: Emit): boolean {
 
 /** "Glukoz - 103 mg/dL" or "Glukoz: 103". Returns true if the line was a known lab test. */
 function tryLab(line: string, emit: Emit): boolean {
-  const m = /^(.*?\S)\s*(?:\s[-–—]\s|:)\s*(.+)$/.exec(line);
-  if (!m) return false;
-  const mapping = findLabMapping(m[1]);
+  // Try every " - " / ":" position, so test names containing a dash still match.
+  let mapping: ReturnType<typeof findLabMapping>;
+  let valueText = '';
+  for (const sep of line.matchAll(/\s[-–—]\s|:/g)) {
+    const found = findLabMapping(line.slice(0, sep.index).trim());
+    const rest = line.slice(sep.index! + sep[0].length).trim();
+    if (found && rest !== '') {
+      mapping = found;
+      valueText = rest;
+      break;
+    }
+  }
   if (!mapping) return false;
-  const valueText = m[2].trim();
   if (/^[<>]/.test(valueText)) {
     emit(mapping.column, null, mapping.test, line, `Sonuç "${valueText}" — kesin sayı değil, yazılmadı`);
     return true;
