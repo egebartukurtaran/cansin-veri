@@ -26,6 +26,8 @@ export interface Observation {
   /** Where it came from, e.g. the test name. */
   source: string;
   warnings: string[];
+  /** Inferred value (e.g. "not in the comorbidity list" → 0): only fills an empty cell. */
+  onlyIfEmpty?: boolean;
 }
 
 export interface ParsedReport {

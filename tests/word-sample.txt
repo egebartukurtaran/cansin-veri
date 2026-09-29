@@ -1,0 +1,82 @@
+Ad soyad: hasta bir
+DOSYA NO: 1111111
+78 yaş erkek
+Pro-BNP - 140 pg/mL
+Glukoz - 118 mg/dL
+Kan Üre Azotu (BUN) - 22 mg/dL
+Kreatinin - 1,36 mg/dL
+Glomerüler Filtrasyon Hızı - 53 mL/dk/1.73m²
+Ürik asit - 7,62 mg/dL
+Protein, Total - 7,2 g/dL
+Albumin - 4,3 g/dL
+Kalsiyum - 9,2 mg/dL
+Fosfor - 2,7 mg/dL
+Sodyum - 140 mEq/L
+Potasyum - 5,0 mEq/L
+HGB (Hemoglobin) - 14,4 g/dL
+PLT (Trombosit) - 201 x10.e3/uL
+WBC (Lökosit) - 7,91 x10.e3/uL
+Nötrofil# (Nötrofil Sayısı) - 3,95 x10.e3/uL
+Lenfosit# (Lenfosit Sayısı) - 3,09 x10.e3/uL
+HCO3 -(Venöz) - 23,5
+CRP Nefelometrik - 11,87 mg/L
+Albümin / Kreatinin (Spot İdrar) - 109 mg/g kreatinin
+Protein / Kreatinin(Spot İdrar) - 193 mg/g kreatinin
+Parathormon - 43,8 pg/mL
+Trigliserid - 107 mg/dL
+Kolesterol, Total - 150 mg/dL
+Kolesterol LDL - 85 mg/dL
+Kolesterol, HDL - 44 mg/dL
+EF: % 55 saptandı.  TAPSE 23 mm ölçüldü.IVC 19 mm ölçüldü solunum ile %50den fazla kollabe oluyor.Kalp boşluklarında trombüs saptanmadı. Perikardiyal effüzyon yok.
+Pab 30
+Hafif ty, hafif my
+Ea küçük
+Lercadip 20 mg 1*1, Cozaar 100 mg 1*0,5, Lipitor 80 mg 1*1, Ecopirin 81 mg 1*1, xatral
+sigara 50 p/y
+
+Komorbidite: KAH(1 stent)
+Kullandığı ilaç: antihipertansif var , tiyazid yok
+
+
+………
+Ad soyad: HASTA İKİ
+DOSYA NO: 2222222
+66 yaş erkek
+Glukoz - 81 mg/dL
+Kan Üre Azotu (BUN) - 24 mg/dL
+Kreatinin - 1,47 mg/dL
+Glomerüler Filtrasyon Hızı - 52 mL/dk/1.73m²
+Ürik asit - 8,02 mg/dL
+Protein, Total - 7,6 g/dL
+Albumin - 4,4 g/dL
+Kalsiyum - 9,4 mg/dL
+Fosfor - 3,2 mg/dL
+AST - 24 U/L
+ALT - 22 U/L
+Sodyum - 140 mEq/L
+Potasyum - 4,7 mEq/L
+Protein (24 Saatlik İdrar) - 132,0 mg/24H
+Albümin- idrar : 10
+Pro-BNP - 45 pg/mL
+HGB (Hemoglobin) - 15,1 g/dL
+PLT (Trombosit) - 182 x10.e3/uL
+WBC (Lökosit) - 8,31 x10.e3/uL
+Nötrofil# (Nötrofil Sayısı) - 5,50 x10.e3/uL
+Lenfosit# (Lenfosit Sayısı) - 2,13 x10.e3/uL
+Parathormon - 28,4 pg/mL
+Trigliserid - 289 mg/dL
+Kolesterol, Total - 213 mg/dL
+Kolesterol LDL - 125 mg/dL
+Kolesterol, HDL - 30 mg/dL
+Crp: 1
+Eko:
+Sol ventrikül boşluk boyutu ve sistolik duvar hareketleri normal. Duvar kalınlıkları artmış, sol ventrikül konsantrik hipertrofik. TAPSE: 24 mm ölçüldü. IVC: 20 mm, solunumla %50den fazla kollabe oluyor.
+Kalp boşluklarında trombüs saptanmadı.Perikardiyal effüzyon yok.
+
+Ef: 60
+Pab: 25
+Sol atrium: 3,4
+Kapak patoloji yok
+Skb: 116/dkb: 69
+ptö:+/+
+komorbidte: : Tiroid ca

@@ -1,9 +1,8 @@
 // Parses the hand-written patient notes in a Word file. Each patient block looks like:
 //
-//   AD SOYAD
+//   Ad soyad: AD SOYAD       (or just the name on its own line)
 //   Dosya No: 1234567        (optional; without it the patient is matched by name)
-//   Yaş: 60
-//   kadın
+//   78 yaş erkek
 //   Glukoz - 103 mg/dL       (lab lines: exact test names, same as the PDFs)
 //   Eko:
 //   Ef: 60
@@ -35,25 +34,26 @@ const NUM = '(\\d+(?:[.,]\\d+)?)';
 /** 0 = yok, 1 = var, null = unclear. */
 export function parseYesNo(text: string): 0 | 1 | null {
   const t = lower(text).trim();
-  const no = word('yok|negatif|hayır|izlenmedi|saptanmadı') .test(t) || /^[-–—]$/.test(t) || t === '0';
+  const no = word('yok|yoktur|negatif|hayır|izlenmedi|saptanmadı|görülmedi').test(t) || /^[-–—]$/.test(t) || t === '0';
   const yes =
-    word('var|mevcut|pozitif|evet|izlendi|saptandı').test(t) || /^\+/.test(t) || t === '1';
+    word('var|mevcut|pozitif|evet|izlendi|saptandı|görüldü').test(t) || /^\+/.test(t) || t === '1';
   if (no === yes) return null;
   return no ? 0 : 1;
 }
 
-type Emit = (column: string, value: number | string | null, source: string, raw: string, warning?: string) => void;
+type Emit = (
+  column: string,
+  value: number | string | null,
+  source: string,
+  raw: string,
+  warning?: string,
+  onlyIfEmpty?: boolean,
+) => void;
 
 interface Rule {
   test: RegExp;
   apply: (m: RegExpExecArray, emit: Emit, line: string) => void;
 }
-
-const yesNoRule = (column: string, source: string) => (_m: RegExpExecArray, emit: Emit, line: string) => {
-  const v = parseYesNo(line.replace(/^.*?(?:hipertro\S*|disfonksiyon|ödem|ptö|pto)\s*[:=]?/i, ''));
-  if (v === null) emit(column, null, source, line, 'var / yok anlaşılamadı, yazılmadı');
-  else emit(column, v, source, line);
-};
 
 const numberRule = (column: string, source: string, group = 1) => (m: RegExpExecArray, emit: Emit, line: string) => {
   const v = parseTypedNumber(m[group]);
@@ -61,7 +61,7 @@ const numberRule = (column: string, source: string, group = 1) => (m: RegExpExec
   else emit(column, v, source, line);
 };
 
-/** Comorbidity text → Yok0Var1 flags. Only written when a "komorbid" line exists. */
+/** Comorbidity text → Yok0Var1 flags. Only written when a comorbidity line exists. */
 const COMORBIDITY_FLAGS: [string, RegExp][] = [
   ['DMYok0Var1', word('dm|diyabet\\S*|diabetes')],
   ['HTYok0Var1', word('ht|htn|hipertansiyon')],
@@ -70,34 +70,101 @@ const COMORBIDITY_FLAGS: [string, RegExp][] = [
   ['SVOYok0Var1', word('svo|sva|inme|serebrovasküler')],
 ];
 
+/** "Kullandığı ilaç: antihipertansif var, tiyazid yok" → drug-class columns. */
+const DRUG_CLASSES: [string, RegExp][] = [
+  ['Antihipertansif_kullanımı', word('antihipertansif\\S*|anti\\s*-?\\s*ht|ahi')],
+  ['RAAS_kullanımı', word('raas\\S*|acei|ace\\s*-?\\s*inh\\S*|ace\\s*-?\\s*i|arb|anjiyotensin\\S*')],
+  ['Tiyazid_kullanımı', word('tiyazid\\S*|tiazid\\S*|hctz|hidroklorotiyazid')],
+  ['KKB_kullanımı', word('kkb|ccb|kalsiyum\\s+kanal\\s+bloker\\S*')],
+  ['Loop_kullanımı', word('loop(?:\\s+diüretik\\S*)?|furosemid|lasix')],
+  ['BB_kullanımı', word('bb|beta\\s*-?\\s*bloker\\S*')],
+  ['MRA_kullanımı', word('mra|spironolakton|aldakton|eplerenon')],
+  ['SGLT2inhibitörü_kullanımı', word('sglt\\s*-?\\s*2\\S*(?:\\s+inh\\S*)?')],
+  ['ESA_kullanımı', word('esa|eritropoetin|epo')],
+  ['Statin_kullanımı', word('statin\\S*')],
+];
+
 /**
  * Regexes with the i flag do not match Turkish "İ" against "i". Replacing it keeps the string
  * length, so positions found in the folded text are valid in the original.
  */
 const fold = (s: string) => s.replace(/İ/g, 'i');
+/** The text of group 1 taken from the original line (group 1 must run to the end of the line). */
+const tailOf = (line: string, m: RegExpExecArray) => line.slice(line.length - m[1].length).trim();
 
-const KOMORBID =
-  /^(?:komorbid(?:ite|iteler|iteleri)?|ek\s+hastal[ıi]k(?:lar[ıi]?|[ıi])?|eşlik\s+eden\s+hastal[ıi]k(?:lar[ıi]?)?|kronik\s+hastal[ıi]k(?:lar[ıi]?)?|özgeçmiş(?:i)?|öz\s*geçmiş(?:i)?)\s*[:=\-–]?\s*(.*)$/i;
+/** Label separator: ":" / "=" (repeated), or " - " before text. A lone "-" is kept as the value. */
+const SEP = '(?:\\s*[:=])*\\s*(?:[-–]\\s+(?=\\S))?';
+const KOMORBID = new RegExp(
+  `^(?:komorb[a-zçğıöşü]*|ek\\s+hastal[a-zçğıöşü]*|eşlik\\s+eden\\s+hastal[a-zçğıöşü]*|kronik\\s+hastal[a-zçğıöşü]*|öz\\s*geçmiş[a-zçğıöşü]*)${SEP}(.*)$`,
+  'i',
+);
 
 function emitComorbidity(text: string, raw: string, emit: Emit) {
   const t = text.replace(/[\s,;]+$/, '').trim();
   const none = t === '' || parseYesNo(t) === 0;
   if (!none) emit('Komorbidite', t, 'Komorbidite', raw);
   for (const [column, re] of COMORBIDITY_FLAGS) {
-    emit(column, none ? 0 : re.test(fold(t)) ? 1 : 0, 'Komorbidite satırından', raw);
+    if (none) emit(column, 0, 'Komorbidite: yok', raw);
+    else if (re.test(fold(t))) emit(column, 1, 'Komorbidite satırından', raw);
+    // Not mentioned → 0, but never replaces a value already in the list.
+    else emit(column, 0, 'Komorbiditede geçmiyor', raw, undefined, true);
   }
+}
+
+/** Pretibial oedema is graded in the list: 0 = yok, 1..4 = +1..+4. "+/+" = both legs +1. */
+export function parseOedema(text: string): { value: number | null; warning?: string } {
+  const sides = lower(text).replace(/\s+/g, '').split('/').filter((x) => x !== '');
+  if (sides.length === 0 || sides.length > 2) return { value: null, warning: 'Anlaşılamadı, yazılmadı' };
+  const grades = sides.map((s): number | 'unknown' | null => {
+    if (/^(yok|negatif|hayır|0|[-–—]+)$/.test(s)) return 0;
+    let m: RegExpExecArray | null;
+    if ((m = /^\+([1-4])$/.exec(s) ?? /^([1-4])\+$/.exec(s))) return Number(m[1]);
+    if (/^\+{1,4}$/.test(s)) return s.length;
+    if (/^(var|mevcut|pozitif)$/.test(s)) return 'unknown';
+    return null;
+  });
+  if (grades.some((g) => g === null)) return { value: null, warning: 'Anlaşılamadı, yazılmadı' };
+  if (grades.includes('unknown')) return { value: null, warning: 'Ödem var ama derecesi (+1…+4) yazılmamış, yazılmadı' };
+  const distinct = new Set(grades);
+  if (distinct.size > 1) return { value: null, warning: 'Sağ ve sol farklı derecede, yazılmadı' };
+  return { value: grades[0] as number };
+}
+
+function smokingLike(column: string, source: string) {
+  return (m: RegExpExecArray, emit: Emit, line: string) => {
+    const t = lower(tailOf(line, m));
+    if (word('bırak\\S*|eski|ex|önceden|geçmişte').test(t)) {
+      emit(column, null, source, line, 'Bırakmış / eski kullanıcı — kodlaması belirsiz, yazılmadı');
+    } else if (/^[-–—]$/.test(t) || word('yok|hayır|içmiyor|kullanmıyor|negatif').test(t) || t === '0') {
+      emit(column, 0, source, line);
+    } else if (/\d/.test(t) || /\+/.test(t) || word('var|içiyor|kullanıyor|aktif|evet|sosyal').test(t)) {
+      emit(column, 1, source, line);
+    } else {
+      emit(column, null, source, line, 'var / yok anlaşılamadı, yazılmadı');
+    }
+  };
+}
+
+const VALVE_ITEM = new RegExp(
+  '^(?:(?:eser|hafif|minimal|minimum|orta|ileri|ağır|hafif-orta|orta-ileri|\\d(?:\\s*[-–]\\s*\\d)?\\.?)\\s*)*' +
+    '(?:my|ty|ay|py|mr|tr|ar|pr|ms|as|md|ad|(?:mitral|triküspit|trikuspit|aort|pulmoner)\\s+(?:yetmezli[ğg]i|darl[ıi][ğg][ıi]))$',
+);
+
+/** "Hafif ty, hafif my" → valve pathology present, type = the text. */
+function tryValveLine(line: string, emit: Emit): boolean {
+  const parts = lower(fold(line)).replace(/[.]$/, '').split(/\s*[,;/+]\s*|\s+ve\s+/).filter((x) => x !== '');
+  if (parts.length === 0 || !parts.every((p) => VALVE_ITEM.test(p))) return false;
+  emit('Kapak_patolojisi', 1, 'Kapak patolojisi', line);
+  emit('Kapak_patolojisi_tipi', line.replace(/[.]$/, '').trim(), 'Kapak patolojisi', line);
+  return true;
 }
 
 const RULES: Rule[] = [
   { test: /^eko\s*:?\s*$/i, apply: () => {} },
   {
-    test: /^ef\s*[:=]?\s*%?\s*(\d+(?:[.,]\d+)?)\s*%?\s*$/i,
-    apply: numberRule(ECHO_COLUMNS.ef, 'Ef'),
-  },
-  {
-    test: /^kapak\s+patolojisi\s*[:=]?\s*(.*)$/i,
+    test: new RegExp(`^kapak\\s+patoloji(?:si|leri)?${SEP}(.*)$`, 'i'),
     apply: (m, emit, line) => {
-      const rest = line.slice(line.length - m[1].length).trim();
+      const rest = tailOf(line, m);
       const yn = parseYesNo(rest.split(/[\s,(:]/)[0] ?? '');
       if (yn === 0) {
         emit('Kapak_patolojisi', 0, 'Kapak patolojisi', line);
@@ -112,7 +179,8 @@ const RULES: Rule[] = [
     },
   },
   {
-    test: /^e\s*\/\s*a\b(.*)$/i,
+    // "e/a 1den büyük", "E/A oranı <1", "Ea küçük"
+    test: /^e\s*[/:-]?\s*a(?![a-zçğıöşü])(.*)$/i,
     apply: (m, emit, line) => {
       const t = lower(m[1]);
       const n = /(\d+(?:[.,]\d+)?)/.exec(t);
@@ -128,23 +196,7 @@ const RULES: Rule[] = [
     },
   },
   {
-    test: /(ventrik\S*\s+hipertro|hipertrof|(?<![a-z])(svh|lvh)(?![a-z]))/i,
-    apply: yesNoRule('Sol_ventrikül_hipertrofisi', 'Sol ventrikül hipertrofisi'),
-  },
-  { test: /diyastolik\s+disfonksiyon/i, apply: yesNoRule('Diyastolik_disfonksiyon', 'Diyastolik disfonksiyon') },
-  {
-    test: new RegExp(`^sol\\s*atri[yu]?um(?:\\s+çapı)?\\s*[:=]?\\s*${NUM}\\s*(?:cm)?\\s*$`, 'i'),
-    apply: numberRule(ECHO_COLUMNS.leftAtrium, 'Sol atriyum'),
-  },
-  { test: new RegExp(`^tapse\\s*[:=]?\\s*${NUM}`, 'i'), apply: numberRule(ECHO_COLUMNS.tapse, 'TAPSE') },
-  { test: new RegExp(`^(?:pab|spab)\\s*[:=]?\\s*${NUM}`, 'i'), apply: numberRule(ECHO_COLUMNS.pab, 'PAB') },
-  { test: new RegExp(`^(?:vci|ivc)\\s*[:=]?\\s*${NUM}`, 'i'), apply: numberRule(ECHO_COLUMNS.ivc, 'VCI') },
-  {
-    test: /%\s*50\s*['’`]?\s*d[ae]n\s+(fazla|az)\s+kollabe/i,
-    apply: (m, emit, line) => emit(ECHO_COLUMNS.ivcCollapse, lower(m[1]) === 'fazla' ? 1 : 0, 'VCI kollabe', line),
-  },
-  {
-    test: new RegExp(`^kbh\\s*süre(?:si)?\\s*[:=]?\\s*${NUM}`, 'i'),
+    test: new RegExp(`^kbh\\s*süre(?:si)?${SEP}${NUM}`, 'i'),
     apply: numberRule('KBHsüresi', 'KBH süresi'),
   },
   {
@@ -154,8 +206,94 @@ const RULES: Rule[] = [
       emit('DKBmmHg', Number(m[2]), 'Tansiyon (DKB)', line);
     },
   },
-  { test: /^(?:pt[öo]|pretibial\s*ödem)\s*[:=]?/i, apply: yesNoRule('pretibial_odem', 'Pretibial ödem') },
+  {
+    // "Skb: 116/dkb: 69"
+    test: /(?<![a-zçğıöşü])[sd]kb\s*[:=]?\s*\d{2,3}/i,
+    apply: (_m, emit, line) => {
+      const t = fold(line);
+      const s = /(?<![a-zçğıöşü])skb\s*[:=]?\s*(\d{2,3})/i.exec(t);
+      const d = /(?<![a-zçğıöşü])dkb\s*[:=]?\s*(\d{2,3})/i.exec(t);
+      if (s) emit('SKBmmHg', Number(s[1]), 'Tansiyon (SKB)', line);
+      if (d) emit('DKBmmHg', Number(d[1]), 'Tansiyon (DKB)', line);
+    },
+  },
+  {
+    test: new RegExp(`^(?:pt[öo]|pretibial\\s*ödem)${SEP}(.*)$`, 'i'),
+    apply: (m, emit, line) => {
+      const r = parseOedema(tailOf(line, m));
+      emit('pretibial_odem', r.value, 'Pretibial ödem', line, r.warning);
+    },
+  },
+  { test: new RegExp(`^sigara(?:\\s+kullanımı)?${SEP}(.*)$`, 'i'), apply: smokingLike('SigaraYok0Var1', 'Sigara') },
+  { test: new RegExp(`^alkol(?:\\s+kullanımı)?${SEP}(.*)$`, 'i'), apply: smokingLike('AlkolYok0Var1', 'Alkol') },
+  {
+    test: new RegExp(`^(?:kulland[ıi][ğg][ıi]\\s+)?ila[çc](?:lar[ıi]?)?(?:\\s+kullan[ıi]m[ıi])?\\s*[:=\\-–]\\s*(.*)$`, 'i'),
+    apply: (m, emit, line) => {
+      for (const item of tailOf(line, m).split(/\s*[,;]\s*|\s+ve\s+/).filter((x) => x.trim() !== '')) {
+        const cls = DRUG_CLASSES.find(([, re]) => re.test(fold(item)));
+        if (!cls) {
+          emit('', null, 'İlaç', line, `"${item}" ilaç grubu tanınmadı`);
+          continue;
+        }
+        const yn = parseYesNo(item.replace(cls[1], ''));
+        // A drug listed without "var/yok" is taken as used.
+        emit(cls[0], yn === null && !/[?]/.test(item) ? 1 : yn, 'Kullandığı ilaç', line);
+      }
+    },
+  },
 ];
+
+/**
+ * Free text (usually copied from the echo report): every value in the line is read, and
+ * var/yok for hypertrophy and diastolic dysfunction is judged within its own sentence.
+ * Returns true if anything was found.
+ */
+function scanText(line: string, emit: Emit): boolean {
+  const t = fold(line);
+  let found = false;
+  const B = '(?<![a-zçğıöşü])';
+  const numbers = (column: string, source: string, re: RegExp) => {
+    const seen = new Set<string>();
+    for (const m of t.matchAll(re)) {
+      const v = parseTypedNumber(m[1]);
+      const key = String(v);
+      found = true;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      emit(column, v, source, line, v === null ? 'Sayı okunamadı, yazılmadı' : undefined);
+    }
+  };
+  numbers(ECHO_COLUMNS.ef, 'EF', new RegExp(`${B}ef\\s*[:=]?\\s*%?\\s*(\\d{1,2}(?:[.,]\\d+)?)(?!\\d)`, 'gi'));
+  numbers(ECHO_COLUMNS.tapse, 'TAPSE', new RegExp(`${B}tapse\\s*[:=]?\\s*${NUM}`, 'gi'));
+  numbers(ECHO_COLUMNS.ivc, 'VCI', new RegExp(`${B}(?:ivc|vci)\\s*[:=]?\\s*${NUM}`, 'gi'));
+  numbers(ECHO_COLUMNS.pab, 'PAB', new RegExp(`${B}s?pab\\s*[:=]?\\s*${NUM}`, 'gi'));
+  numbers(ECHO_COLUMNS.leftAtrium, 'Sol atriyum', new RegExp(`${B}sol\\s*atri[yu]?um(?:\\s+çapı)?\\s*[:=]?\\s*${NUM}`, 'gi'));
+
+  const collapse = [...t.matchAll(/%\s*50\s*['’`]?\s*(?:d[ae]n)?\s*(fazla|az)\s+kollabe/gi)];
+  const kinds = new Set(collapse.map((m) => lower(m[1])));
+  if (kinds.size === 1) emit(ECHO_COLUMNS.ivcCollapse, kinds.has('fazla') ? 1 : 0, 'VCI kollabe', line);
+  else if (kinds.size > 1) emit(ECHO_COLUMNS.ivcCollapse, null, 'VCI kollabe', line, 'Çelişkili ifade, yazılmadı');
+  if (collapse.length > 0) found = true;
+
+  const NEG = word('yok|yoktur|izlenmedi|saptanmadı|görülmedi|negatif');
+  for (const clause of t.split(/[.;,](?!\d)/)) {
+    const judge = (column: string, source: string, positive: RegExp) => {
+      found = true;
+      if (/\?/.test(clause)) return emit(column, null, source, line, 'Belirsiz ifade, yazılmadı');
+      const neg = NEG.test(clause) || /:\s*[-–—]\s*$/.test(clause);
+      const pos = positive.test(clause) || word('var|mevcut|izlendi|saptandı|görüldü|pozitif').test(clause);
+      if (neg === pos) emit(column, null, source, line, 'var / yok anlaşılamadı, yazılmadı');
+      else emit(column, neg ? 0 : 1, source, line);
+    };
+    if (/hipertro/i.test(clause) || new RegExp(`${B}(?:svh|lvh)(?![a-z])`, 'i').test(clause)) {
+      judge('Sol_ventrikül_hipertrofisi', 'Sol ventrikül hipertrofisi', /hipertrofik/i);
+    }
+    if (/diyastolik\s+disfonksiyon/i.test(clause)) {
+      judge('Diyastolik_disfonksiyon', 'Diyastolik disfonksiyon', /(?:evre|grade|tip)\s*[1-3i]/i);
+    }
+  }
+  return found;
+}
 
 /** "Glukoz - 103 mg/dL" or "Glukoz: 103". Returns true if the line was a known lab test. */
 function tryLab(line: string, emit: Emit): boolean {
@@ -254,31 +392,50 @@ function splitNameLine(line: string): { name: string; info: { age?: number; sex?
 }
 
 const isPatientHeader = (line: string) => FILE_NO.test(line) || parseAgeSex(line) !== null;
+const NAME_LABEL =
+  /^(?:ad[ıi]?\s*[-,]?\s*soyad[ıi]?|hasta(?:n[ıi]n)?\s+ad[ıi](?:\s*[-,]?\s*soyad[ıi]?)?|isim)\s*[:=\-–]\s*(.+)$/i;
+const SEPARATOR = /^[.…_\-–—=*·•~\s]+$/;
 
-function isHeaderLike(line: string) {
-  return isPatientHeader(line);
+/** Everything that reads a value from a content line (labs, rules, free text...). */
+function readContent(line: string, columns: Map<string, string>, emit: Emit): boolean {
+  if (tryLab(line, emit)) return true;
+  const folded = fold(line);
+  const rule = RULES.find((r) => r.test.test(folded));
+  if (rule) {
+    rule.apply(rule.test.exec(folded)!, emit, line);
+    return true;
+  }
+  if (tryValveLine(line, emit)) return true;
+  if (tryColumn(line, columns, emit)) return true;
+  return scanText(line, emit);
 }
 
 function isKnown(line: string, columns: Map<string, string>): boolean {
-  const noop: Emit = () => {};
   return (
-    isHeaderLike(line) ||
+    isPatientHeader(line) ||
+    SEPARATOR.test(line) ||
+    NAME_LABEL.test(fold(line)) ||
     KOMORBID.test(fold(line)) ||
-    RULES.some((r) => r.test.test(fold(line))) ||
-    tryLab(line, noop) ||
-    tryColumn(line, columns, noop)
+    readContent(line, columns, () => {})
   );
 }
 
 /**
- * Splits the document into patient blocks: a block starts at an unrecognised line (the name)
- * directly followed by a "Dosya No" or "Yaş" line.
+ * Splits the document into patient blocks. A block starts at "Ad soyad: ...", or at an
+ * unrecognised line (the name) directly followed by a "Dosya No" / age / sex line.
  */
 function splitPatients(lines: string[], columns: Map<string, string>): { name: string; body: string[] }[] {
   const blocks: { name: string; body: string[] }[] = [];
   let current: { name: string; body: string[] } | null = null;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (SEPARATOR.test(line)) continue;
+    const label = NAME_LABEL.exec(fold(line));
+    if (label) {
+      current = { name: tailOf(line, label), body: [] };
+      blocks.push(current);
+      continue;
+    }
     const next = lines[i + 1];
     const startsBlock =
       !isKnown(line, columns) &&
@@ -292,7 +449,6 @@ function splitPatients(lines: string[], columns: Map<string, string>): { name: s
   }
   return blocks;
 }
-
 export function parseWordLines(rawLines: string[], fileName: string, columnNames: string[]): ParsedReport[] {
   const columns = new Map(columnNames.map((c) => [squash(c), c]));
   const lines = rawLines.map(normalizeName).filter((l) => l !== '');
@@ -302,8 +458,11 @@ export function parseWordLines(rawLines: string[], fileName: string, columnNames
     const patient: PatientInfo = { name: head.name.toLocaleUpperCase('tr'), fileNo: '', birth: null, sex: null };
     const observations: Observation[] = [];
     const unrecognized: string[] = [];
-    const emit: Emit = (column, value, source, raw, warning) =>
-      observations.push({ column, value, raw, source, warnings: warning ? [warning] : [] });
+    const emit: Emit = (column, value, source, raw, warning, onlyIfEmpty) => {
+      // A warning without a column (e.g. unknown drug group) is shown as an unread line.
+      if (column === '') unrecognized.push(`${raw} — ${warning}`);
+      else observations.push({ column, value, raw, source, warnings: warning ? [warning] : [], ...(onlyIfEmpty ? { onlyIfEmpty } : {}) });
+    };
     const ages = new Set<number>();
     const sexes = new Set<1 | 2>();
     const takeInfo = (info: { age?: number; sex?: 1 | 2 }, line: string) => {
@@ -334,7 +493,7 @@ export function parseWordLines(rawLines: string[], fileName: string, columnNames
       flushComorbidity();
       const kom = KOMORBID.exec(fold(line));
       if (kom) {
-        const text = line.slice(line.length - kom[1].length).trim();
+        const text = tailOf(line, kom);
         if (text === '') comorbidity = { lines: [], raw: line };
         else emitComorbidity(text, line, emit);
         continue;
@@ -349,14 +508,7 @@ export function parseWordLines(rawLines: string[], fileName: string, columnNames
         takeInfo(info, line);
         continue;
       }
-      if (tryLab(line, emit)) continue;
-      const folded = fold(line);
-      const rule = RULES.find((r) => r.test.test(folded));
-      if (rule) {
-        rule.apply(rule.test.exec(folded)!, emit, line);
-        continue;
-      }
-      if (tryColumn(line, columns, emit)) continue;
+      if (readContent(line, columns, emit)) continue;
       unrecognized.push(line);
     }
     flushComorbidity();

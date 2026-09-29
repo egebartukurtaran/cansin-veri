@@ -40,6 +40,8 @@ export const LAB_MAPPING: LabMapping[] = [
   { test: 'Parathormon', column: 'PTH' },
   { test: 'CRP Nefelometrik', column: 'CRP' },
   { test: 'cHCO3(Pst)c (Venöz)', column: 'HCO3' },
+  { test: 'HCO3 -(Venöz)', column: 'HCO3' },
+  { test: 'HCO3 (Venöz)', column: 'HCO3' },
 ];
 
 /**

@@ -4,10 +4,14 @@ import { describe, expect, test } from 'vitest';
 import { applyPlan, buildPlan, findColumn, summarize, type Plan } from '../src/merge';
 import { readSav, type SavFile } from '../src/sav/sav';
 import { documentLines, readDocxLines } from '../src/word/docx';
-import { parseAgeSex, parseTypedNumber, parseWordLines, parseYesNo } from '../src/word/notes';
+import { parseAgeSex, parseOedema, parseTypedNumber, parseWordLines, parseYesNo } from '../src/word/notes';
 import { fixture, hasFixtures, patient } from './helpers';
 
 const COLUMNS = [
+  'SigaraYok0Var1', 'AlkolYok0Var1', 'Antihipertansif_kullanımı', 'Tiyazid_kullanımı', 'RAAS_kullanımı', 'Statin_kullanımı',
+  'Ürik_asit', 'Totalprotein', 'Alb', 'Ca', 'PO4', 'Na', 'K', 'AST', 'ALT', 'TG', 'Totalkolesterol', 'LDL', 'HDL',
+  'Hb', 'PLT', 'Nötrofil', 'Lenfosit', 'eGFR', 'ProBNP', 'Spotidraralbuminüri', 'Spotidrarproteinüri',
+  'TAPSE', 'VCI_çapı_ekspiryum', 'VCI_kollabe', 'pab',
   'Adsoyad', 'DosyaNo', 'CinsiyetK1E2', 'Yaş', 'Boy', 'KBHsüresi', 'Komorbidite', 'DMYok0Var1', 'HTYok0Var1',
   'KAHYok0Var1', 'KOAHYok0Var1', 'SVOYok0Var1', 'pretibial_odem', 'SKBmmHg', 'DKBmmHg', 'glukoz', 'Kre', 'Lökosit',
   'PTH', 'CRP', 'HCO3', 'EFyüzde', 'Kapak_patolojisi', 'Kapak_patolojisi_tipi', 'Sol_ventrikül_hipertrofisi',
@@ -189,6 +193,86 @@ describe('word notes', () => {
     expect(applyPlan(sav, plan).rows[1][5]).toBe('KOAH');
   });
 
+  test('real-format sample: two patients, free-text echo, drugs, smoking, oedema', () => {
+    const lines = fs.readFileSync(`${__dirname}/word-sample.txt`, 'utf8').split('\n');
+    const reps = parseWordLines(lines, 'sample.docx', COLUMNS);
+    expect(reps.map((r) => [r.patient.name, r.patient.fileNo, r.patient.sex])).toEqual([
+      ['HASTA BİR', '1111111', 2],
+      ['HASTA İKİ', '2222222', 2],
+    ]);
+    const v = (i: number) => Object.fromEntries(reps[i].observations.map((o) => [o.column, o.value]));
+    expect(v(0)).toMatchObject({
+      Yaş: 78, ProBNP: 140, glukoz: 118, Kre: 1.36, K: 5, Lökosit: 7910, HCO3: 23.5, CRP: 11.87, PTH: 43.8,
+      EFyüzde: 55, TAPSE: 23, VCI_çapı_ekspiryum: 19, VCI_kollabe: 1, pab: 30,
+      Kapak_patolojisi: 1, Kapak_patolojisi_tipi: 'Hafif ty, hafif my', e_a: 0,
+      SigaraYok0Var1: 1, Komorbidite: 'KAH(1 stent)', KAHYok0Var1: 1,
+      Antihipertansif_kullanımı: 1, Tiyazid_kullanımı: 0,
+    });
+    expect(reps[0].unrecognized).toEqual([
+      'Kan Üre Azotu (BUN) - 22 mg/dL',
+      'Lercadip 20 mg 1*1, Cozaar 100 mg 1*0,5, Lipitor 80 mg 1*1, Ecopirin 81 mg 1*1, xatral',
+    ]);
+    expect(v(1)).toMatchObject({
+      Yaş: 66, glukoz: 81, AST: 24, CRP: 1, TAPSE: 24, VCI_çapı_ekspiryum: 20, VCI_kollabe: 1,
+      Sol_ventrikül_hipertrofisi: 1, EFyüzde: 60, pab: 25, Sol_atriyum_çapı: 3.4,
+      Kapak_patolojisi: 0, Kapak_patolojisi_tipi: '0', SKBmmHg: 116, DKBmmHg: 69, pretibial_odem: 1,
+      Komorbidite: 'Tiroid ca', HTYok0Var1: 0,
+    });
+    // Not written because unsure what they map to.
+    expect(reps[1].unrecognized).toContain('Albümin- idrar : 10');
+    expect(reps[1].unrecognized).toContain('Protein (24 Saatlik İdrar) - 132,0 mg/24H');
+    expect(v(1).Spotidraralbuminüri).toBeUndefined();
+  });
+
+  test('free text: each value read, var/yok judged per sentence', () => {
+    const v = (line: string) => {
+      const [r] = parseWordLines(['X Y', 'Yaş: 60', line], 'x.docx', COLUMNS);
+      return Object.fromEntries(r.observations.filter((o) => o.column !== 'Yaş').map((o) => [o.column, o.value]));
+    };
+    // "yok" in another sentence must not make hypertrophy 0.
+    expect(v('Sol ventrikül konsantrik hipertrofik. Perikardiyal effüzyon yok.')).toEqual({ Sol_ventrikül_hipertrofisi: 1 });
+    expect(v('Sol ventrikül hipertrofisi yok, diyastolik disfonksiyon var')).toEqual({
+      Sol_ventrikül_hipertrofisi: 0, Diyastolik_disfonksiyon: 1,
+    });
+    expect(v('ventrikül hipertroi yok')).toEqual({ Sol_ventrikül_hipertrofisi: 0 });
+    expect(v('Evre 1 diyastolik disfonksiyon')).toEqual({ Diyastolik_disfonksiyon: 1 });
+    expect(v('EF: % 55 saptandı. TAPSE 23 mm ölçüldü.IVC 19 mm, %50den az kollabe')).toEqual({
+      EFyüzde: 55, TAPSE: 23, VCI_çapı_ekspiryum: 19, VCI_kollabe: 0,
+    });
+    expect(v('Perikardiyal effüzyon yok')).toEqual({}); // "effüzyon" is not EF
+  });
+
+  test('pretibial oedema grades', () => {
+    expect(parseOedema('-').value).toBe(0);
+    expect(parseOedema('-/-').value).toBe(0);
+    expect(parseOedema('yok').value).toBe(0);
+    expect(parseOedema('+').value).toBe(1);
+    expect(parseOedema('+/+').value).toBe(1);
+    expect(parseOedema('++').value).toBe(2);
+    expect(parseOedema('+2/+2').value).toBe(2);
+    expect(parseOedema('3+').value).toBe(3);
+    expect(parseOedema('+1/+2').value).toBeNull();
+    expect(parseOedema('var').value).toBeNull();
+  });
+
+  test('smoking, alcohol, drugs, valve lines', () => {
+    const v = (lines: string[]) => {
+      const [r] = parseWordLines(['X Y', 'Yaş: 60', ...lines], 'x.docx', COLUMNS);
+      return { v: Object.fromEntries(r.observations.filter((o) => o.column !== 'Yaş').map((o) => [o.column, o.value])), un: r.unrecognized ?? [] };
+    };
+    expect(v(['sigara 50 p/y']).v).toEqual({ SigaraYok0Var1: 1 });
+    expect(v(['Sigara: yok']).v).toEqual({ SigaraYok0Var1: 0 });
+    expect(v(['sigara: bırakmış']).v).toEqual({ SigaraYok0Var1: null });
+    expect(v(['Alkol: -']).v).toEqual({ AlkolYok0Var1: 0 });
+    expect(v(['İlaçları: RAAS bloker, statin, tiyazid yok']).v).toEqual({
+      RAAS_kullanımı: 1, Statin_kullanımı: 1, Tiyazid_kullanımı: 0,
+    });
+    expect(v(['Kullandığı ilaç: xyz var']).un[0]).toMatch(/ilaç grubu tanınmadı/);
+    expect(v(['eser my, 1-2 ty']).v).toEqual({ Kapak_patolojisi: 1, Kapak_patolojisi_tipi: 'eser my, 1-2 ty' });
+    expect(v(['Kapak patoloji yok']).v).toEqual({ Kapak_patolojisi: 0, Kapak_patolojisi_tipi: '0' });
+    expect(v(['komorbidte: : Tiroid ca']).v).toMatchObject({ Komorbidite: 'Tiroid ca' });
+  });
+
   test('helpers', () => {
     expect(parseTypedNumber('22.1')).toBe(22.1);
     expect(parseTypedNumber('1.492')).toBeNull();
@@ -324,6 +408,21 @@ describe('merge with Word', () => {
       observations: [{ column: 'Kre', value: 1.3, raw: '1,3', source: 'Kreatinin', warnings: [] }],
     };
     expect(change(buildPlan(sav, [pdf]), 'Kre').status).toBe('conflict');
+  });
+
+  test('disease not mentioned in comorbidity never overwrites the list', () => {
+    const sav = fakeSav([{ Adsoyad: 'AYŞE YILDIZ', DosyaNo: '555' }]);
+    sav.variables.push({ name: 'HTYok0Var1', shortName: 'HT', width: 0, slots: 1 }, { name: 'KAHYok0Var1', shortName: 'KAH', width: 0, slots: 1 });
+    sav.rows[0].push(1, null);
+    const plan = buildPlan(sav, parseWordLines(['AYŞE YILDIZ', 'Yaş: 60', 'Komorbidite: KAH'], 'w.docx', COLUMNS));
+    expect(change(plan, 'HTYok0Var1').status).toBe('skip'); // list keeps HT = 1
+    expect(change(plan, 'KAHYok0Var1').status).toBe('write');
+    const row = applyPlan(sav, plan).rows[0];
+    expect(row.slice(-2)).toEqual([1, 1]);
+
+    // Explicit "yok" still counts as a real value (Word wins, as an override).
+    const plan2 = buildPlan(sav, parseWordLines(['AYŞE YILDIZ', 'Yaş: 60', 'Komorbidite: yok'], 'w.docx', COLUMNS));
+    expect(change(plan2, 'HTYok0Var1').status).toBe('override');
   });
 
   test('renamed column alias (AKŞ ↔ glukoz)', () => {

@@ -58,6 +58,8 @@ interface Candidate {
   warnings: string[];
   /** From a Word note: checked by hand, so it takes precedence (see resolve). */
   fromWord: boolean;
+  /** Inferred value that may only fill an empty cell. */
+  onlyIfEmpty?: boolean;
 }
 
 const trUpper = (s: string) => s.normalize('NFC').replace(/\s+/g, ' ').trim().toLocaleUpperCase('tr');
@@ -113,7 +115,18 @@ export function findColumn(sav: SavFile, name: string): number {
 function resolve(column: string, cands: Candidate[], sav: SavFile, current: Cell): Change {
   // Word notes are checked by hand: when they give a readable value, they win over PDFs and
   // over the list (shown as an 'override' the user can untick).
-  const word = cands.filter((c) => c.fromWord && c.value !== null);
+  const explicit = cands.filter((c) => c.fromWord && c.value !== null && !c.onlyIfEmpty);
+  const inferred = cands.filter((c) => c.fromWord && c.value !== null && c.onlyIfEmpty);
+  if (explicit.length === 0 && inferred.length > 0 && !isEmpty(current)) {
+    // e.g. "HT not in the comorbidity line" must not turn an existing HT=1 into 0.
+    const change = resolveDated(column, inferred, sav, current);
+    if (change.status === 'conflict') {
+      change.status = 'skip';
+      change.messages = [`Word’de geçmediği için 0 çıkarıldı; listedeki ${displayValue(current)} korunuyor`];
+    }
+    return change;
+  }
+  const word = explicit.length > 0 ? explicit : inferred;
   if (word.length > 0) {
     const change = resolveDated(column, word, sav, current);
     const others = cands.filter((c) => !c.fromWord && c.value !== null);
@@ -330,7 +343,7 @@ export function buildPlan(sav: SavFile, results: ReportResult[]): Plan {
       for (const o of r.observations) {
         cands.push({
           column: o.column, value: o.value, raw: o.raw, source: o.source, fileName: r.fileName, date: r.date,
-          warnings: o.warnings, fromWord: r.kind === 'word',
+          warnings: o.warnings, fromWord: r.kind === 'word', onlyIfEmpty: o.onlyIfEmpty,
         });
       }
     }

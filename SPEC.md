@@ -60,31 +60,47 @@ Değerler iki yerden okunur:
 Ne lab ne eko ise: önizlemede "Tanınmadı: <dosya adı>" uyarısı, hiçbir şey yazılmaz.
 
 ### 4.4 Word (.docx) notları
-PDF'lerden elle derlenmiş hasta notları. Bir dosyada bir veya birden fazla hasta olabilir. `.doc` (eski biçim) desteklenmez; kullanıcıya `.docx` olarak kaydetmesi söylenir.
+PDF'lerden elle derlenmiş hasta notları. Bir dosyada birden fazla hasta olabilir (aralarında `………` gibi ayraç satırı olabilir). `.doc` (eski biçim) desteklenmez.
 
-Hasta bloğu: **ad soyad satırı**, hemen altında `Dosya No: ...` veya `Yaş: ...` satırı (yeni hasta bloğu böyle başlar). Tarih yoktur.
+Örnek blok:
+```
+Ad soyad: ayşe yıldız
+DOSYA NO: 1234567
+78 yaş erkek
+Glukoz - 118 mg/dL                      ← lab satırları, test adı PDF ile aynı
+EF: % 55 saptandı. TAPSE 23 mm ölçüldü.IVC 19 mm ölçüldü solunum ile %50den fazla kollabe oluyor.
+Pab 30
+Hafif ty, hafif my
+Ea küçük
+sigara 50 p/y
+Komorbidite: KAH(1 stent)
+Kullandığı ilaç: antihipertansif var , tiyazid yok
+Skb: 116/dkb: 69
+ptö:+/+
+```
+
+Hasta bloğu `Ad soyad: ...` satırıyla (veya tek başına ad satırı + altında Dosya No / yaş / cinsiyet satırıyla) başlar. `Dosya No` yoksa hasta listedeki **isimle** (büyük/küçük harf duyarsız, tekil ise) eşleştirilir; Dosya No'suz yeni hasta eklenmez.
 
 | Satır | Kolon | Kural |
 |---|---|---|
-| `Dosya No: 1234567` | eşleştirme | İsteğe bağlı. Yoksa hasta **listedeki isimle** (büyük/küçük harf duyarsız) eşleştirilir; isim listede tek değilse veya yoksa hiçbir şey yazılmaz. Dosya No'suz yeni hasta eklenmez. |
-| `Yaş: 60`, `Yaş - 60`, `60 yaşında`, `60 yaşında kadın hasta`, `60/K`, `Kadın, 60` | `Yaş`, `CinsiyetK1E2` | Yaş doğrudan; kadın/bayan/K → 1, erkek/bay/E → 2. Ad satırında da olabilir: `AD SOYAD, 60, K` / `AD SOYAD (60 yaş kadın)`. Aynı notta hem kadın hem erkek varsa yazılmaz. |
-| `<Test Adı> - <değer> <birim>` | §5.2 | Test adı PDF'lerle aynı, **tam eşleşme**; `<`/`>` yazılmaz |
-| `Ef: 60` | `EFyüzde` | |
-| `Kapak patolojisi yok` / `var: eser MY` | `Kapak_patolojisi`, `Kapak_patolojisi_tipi` | yok → 0 ve tipi `"0"`; var → 1 ve tipi = açıklama |
-| `e/a 1den büyük` / `küçük` | `e_a` | 1 / 0 |
-| `... hipertrofi yok/var` | `Sol_ventrikül_hipertrofisi` | 0 / 1; belirsizse yazılmaz |
-| `diyastolik disfonksiyon yok/var` | `Diyastolik_disfonksiyon` | 0 / 1 |
-| `sol atrium 3,3` | `Sol_atriyum_çapı` | |
-| `TAPSE`, `PAB`, `VCI` + sayı; `%50'den fazla/az kollabe` | eko kolonları | §5.3 ile aynı |
+| `78 yaş erkek`, `Yaş: 60`, `Yaş - 60`, `60/K`, `Cinsiyet: Kadın`, ad satırında `AD SOYAD, 60, K` | `Yaş`, `CinsiyetK1E2` | kadın/bayan/K → 1, erkek/bay/E → 2; çelişen cinsiyet yazılmaz |
+| `<Test Adı> - <değer> <birim>` | §5.2 | Tam eşleşme (`HCO3 -(Venöz)`, `cHCO3(Pst)c (Venöz)` → HCO3); `<`/`>` yazılmaz |
+| Serbest eko metni | `EFyüzde`, `TAPSE`, `VCI_çapı_ekspiryum`, `pab`, `Sol_atriyum_çapı`, `VCI_kollabe` | Satırdaki **tüm** değerler okunur (`EF: % 55`, `TAPSE 23 mm`, `IVC 19 mm`, `Pab 30`, `%50den fazla/az kollabe`) |
+| `... konsantrik hipertrofik`, `hipertrofi yok` | `Sol_ventrikül_hipertrofisi` | var/yok **aynı cümle içinde** değerlendirilir (başka cümledeki "yok" etkilemez); belirsizse yazılmaz |
+| `diyastolik disfonksiyon yok/var`, `Evre 1 diyastolik disfonksiyon` | `Diyastolik_disfonksiyon` | aynı kural |
+| `Kapak patoloji(si) yok` / `var: eser MY`, ya da tek başına `Hafif ty, hafif my` | `Kapak_patolojisi`, `Kapak_patolojisi_tipi` | yok → 0 ve tipi `"0"`; var → 1 ve tipi = açıklama |
+| `e/a 1den büyük`, `Ea küçük`, `E/A <1` | `e_a` | 1 / 0 |
 | `kbh süresi: 7` | `KBHsüresi` | |
-| `Komorbidite: HT, DM`, `KOMORBİDİTE - HT` (tablo), `Ek hastalıklar:`, `Özgeçmiş:`, ya da `Komorbidite:` altında `- HT` / `- DM` madde listesi; `yok` → hepsi 0 | `Komorbidite` (metin) + `DMYok0Var1`, `HTYok0Var1`, `KAHYok0Var1`, `KOAHYok0Var1`, `SVOYok0Var1` | geçen → 1, geçmeyen → 0 |
-| `Ofis Ta: 145 (skb) /85 (dkb)` | `SKBmmHg`, `DKBmmHg` | |
-| `PTÖ: -` / `+` | `pretibial_odem` | 0 / 1 |
-| `<Listedeki kolon adı>: <değer>` | o kolon | Genel kural: herhangi bir liste kolonu bu şekilde eklenebilir (örn. `Boy: 162`) |
+| `Komorbidite: ...` (`komorbidte: :` gibi yazım hataları, `Ek hastalıklar:`, `Özgeçmiş:`, alt satırlarda madde listesi) | `Komorbidite` + `DM/HT/KAH/KOAH/SVOYok0Var1` | Geçen → 1. **Geçmeyen → 0 yalnızca boş hücreye**; listede dolu değerin üzerine asla yazılmaz. `yok` → hepsi 0 |
+| `Ofis Ta: 145/85`, `Skb: 116/dkb: 69` | `SKBmmHg`, `DKBmmHg` | |
+| `ptö: -`, `+`, `+/+`, `++`, `+2/+2` | `pretibial_odem` | Derecelidir (0=yok, 1..4=+1..+4). `+/+` → 1, `++` → 2; derecesiz "var" veya sağ/sol farklı → yazılmaz |
+| `sigara 50 p/y`, `Sigara: yok`, `Alkol: -` | `SigaraYok0Var1`, `AlkolYok0Var1` | sayı/var → 1, yok/- → 0; "bırakmış/eski" → yazılmaz |
+| `Kullandığı ilaç: antihipertansif var, tiyazid yok, statin` | `*_kullanımı` | İlaç **grubu** adıyla: antihipertansif, RAAS/ACEi/ARB, tiyazid, KKB, loop/furosemid, BB, MRA, SGLT2, ESA, statin. var/yok yazılmamışsa → 1. Tanınmayan grup önizlemede gösterilir |
+| `<Listedeki kolon adı>: <değer>` (örn. `Crp: 1`, `Boy: 162`) | o kolon | Genel kural |
 
-Anlaşılamayan satırlar önizlemede listelenir, hiçbir şey yazılmaz. Büyük harf ve Türkçe `İ` ile yazılmış satırlar da tanınır. Metin kolonlarında büyük/küçük harf farkı (`ht, dm` / `HT, DM`) çakışma sayılmaz.
+Anlaşılamayan satırlar (ör. `Kan Üre Azotu (BUN)`, marka adlı ilaç listesi) önizlemede listelenir, hiçbir şey yazılmaz. Büyük harf ve Türkçe `İ` ile yazılmış satırlar da tanınır. Metin kolonlarında büyük/küçük harf farkı çakışma sayılmaz.
 
-**Word önceliklidir** (elle kontrol edilmiş kaynak): Word'deki okunabilir değer PDF'lerdeki değere ve listedeki dolu değere göre esas alınır. Listedeki dolu ve farklı bir değerin üzerine yazılacaksa önizlemede "🔁 Üzerine yazılacak" satırı olarak, **varsayılan işaretli** bir kutuyla gösterilir; işaret kaldırılırsa listedeki değer korunur ("Hepsini işaretle" / "Hiçbirini değiştirme" butonları var). İki Word dosyası aynı kolona farklı değer verirse çakışma olur, yazılmaz. Sadece PDF kaynaklı çakışmalarda kural değişmedi (§6): üzerine yazılmaz.
+**Word önceliklidir** (elle kontrol edilmiş kaynak): Word'deki okunabilir değer PDF'lerdeki değere ve listedeki dolu değere göre esas alınır. Listedeki dolu ve farklı bir değerin üzerine yazılacaksa önizlemede "🔁 Üzerine yazılacak" satırı olarak, **varsayılan işaretli** bir kutuyla gösterilir; işaret kaldırılırsa listedeki değer korunur. İki Word kaynağı aynı kolona farklı değer verirse çakışma olur, yazılmaz. Sadece PDF kaynaklı çakışmalarda kural değişmedi (§6).
 
 ## 5. Kolon eşleştirmesi
 
