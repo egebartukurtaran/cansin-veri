@@ -1,10 +1,12 @@
 import './style.css';
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { applyPlan, buildPlan, displayValue, type Change, type Plan, type Status } from './merge';
+import { applyPlan, buildPlan, displayValue, findColumn, type Change, type Plan, type Status } from './merge';
 import { extractItems, parseItems, type PdfDocument } from './pdf/parse';
 import type { ReportResult } from './pdf/types';
 import { findVariable, readSav, writeSav, type SavFile } from './sav/sav';
+import { readDocxLines } from './word/docx';
+import { parseWordLines } from './word/notes';
 import { clearLastHandle, loadLastHandle, saveLastHandle } from './storage';
 import { formatDate } from './util';
 
@@ -19,7 +21,8 @@ interface ListState {
 interface PdfEntry {
   key: string;
   name: string;
-  result: ReportResult | null; // null while reading
+  /** A Word file can hold several patients. null while reading. */
+  results: ReportResult[] | null;
 }
 
 const state = {
@@ -62,8 +65,8 @@ function setMessage(kind: 'ok' | 'error', text: string) {
 
 function recompute() {
   state.plan =
-    state.list && state.pdfs.length > 0 && state.pdfs.every((p) => p.result)
-      ? buildPlan(state.list.sav, state.pdfs.map((p) => p.result!))
+    state.list && state.pdfs.length > 0 && state.pdfs.every((p) => p.results)
+      ? buildPlan(state.list.sav, state.pdfs.flatMap((p) => p.results!))
       : null;
 }
 
@@ -135,28 +138,45 @@ async function readPdf(file: File): Promise<ReportResult> {
   }
 }
 
+async function readWord(file: File): Promise<ReportResult[]> {
+  if (file.name.toLowerCase().endsWith('.doc')) {
+    return [{ kind: 'unknown', fileName: file.name, reason: 'Eski Word biçimi (.doc). Word’de “Farklı Kaydet → .docx” ile kaydedip tekrar ekleyin' }];
+  }
+  try {
+    const lines = await readDocxLines(new Uint8Array(await file.arrayBuffer()));
+    const columns = state.list?.sav.variables.map((v) => v.name) ?? [];
+    const reports = parseWordLines(lines, file.name, columns);
+    return reports.length > 0 ? reports : [{ kind: 'unknown', fileName: file.name, reason: 'Word dosyasında hasta bulunamadı' }];
+  } catch (e) {
+    return [{ kind: 'unknown', fileName: file.name, reason: `Word dosyası okunamadı (${(e as Error).message})` }];
+  }
+}
+
+const isWord = (f: File) => /\.docx?$/i.test(f.name);
+const isPdf = (f: File) => f.name.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf';
+
 async function addPdfs(files: File[]) {
-  const pdfs = files.filter((f) => f.name.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf');
+  const pdfs = files.filter((f) => isPdf(f) || isWord(f));
   const entries: { entry: PdfEntry; file: File }[] = [];
   for (const f of pdfs) {
     const key = `${f.name}|${f.size}|${f.lastModified}`;
     if (state.pdfs.some((p) => p.key === key)) continue;
-    const entry: PdfEntry = { key, name: f.name, result: null };
+    const entry: PdfEntry = { key, name: f.name, results: null };
     state.pdfs.push(entry);
     entries.push({ entry, file: f });
   }
-  if (pdfs.length < files.length) setMessage('error', 'PDF olmayan dosyalar atlandı.');
+  if (pdfs.length < files.length) setMessage('error', 'PDF veya Word olmayan dosyalar atlandı.');
   recompute();
   render();
   for (const { entry, file } of entries) {
-    entry.result = await readPdf(file);
+    entry.results = isWord(file) ? await readWord(file) : [await readPdf(file)];
     recompute();
     render();
   }
 }
 
 function pickPdfs() {
-  const input = h('input', { type: 'file', accept: '.pdf,application/pdf', multiple: true });
+  const input = h('input', { type: 'file', accept: '.pdf,.docx,.doc,application/pdf', multiple: true });
   input.onchange = () => input.files && addPdfs([...input.files]);
   input.click();
 }
@@ -259,7 +279,7 @@ function renderPdfs(): HTMLElement {
   const zone = h(
     'div',
     { class: `drop${disabled ? ' disabled' : ''}`, onclick: () => !disabled && pickPdfs() },
-    h('p', { class: 'big' }, 'PDF raporlarını buraya sürükleyin'),
+    h('p', { class: 'big' }, 'PDF raporlarını veya Word dosyasını buraya sürükleyin'),
     h('p', {}, 'veya tıklayıp seçin (birden fazla seçebilirsiniz)'),
   );
   zone.addEventListener('dragover', (e) => {
@@ -273,20 +293,24 @@ function renderPdfs(): HTMLElement {
     if (!disabled && e.dataTransfer) void addPdfs([...e.dataTransfer.files]);
   });
 
+  const KIND: Record<string, string> = { lab: 'Laboratuvar', eko: 'Eko', word: 'Word' };
+  const describe = (r: ReportResult) =>
+    r.kind === 'unknown'
+      ? `Tanınmadı — ${r.reason}`
+      : [KIND[r.kind], r.patient.name, r.patient.fileNo && `(${r.patient.fileNo})`, r.date && formatDate(r.date)]
+          .filter(Boolean)
+          .join(' · ');
   const items = state.pdfs.map((p) => {
-    const r = p.result;
-    const text = !r
-      ? 'okunuyor…'
-      : r.kind === 'unknown'
-        ? `Tanınmadı — ${r.reason}`
-        : `${r.kind === 'lab' ? 'Laboratuvar' : 'Eko'} · ${r.patient.name} (${r.patient.fileNo}) · ${formatDate(r.date)}`;
-    return h('li', { class: r?.kind === 'unknown' ? 'bad' : '' }, h('strong', {}, p.name), ' — ', text);
+    const rs = p.results;
+    const bad = rs?.some((r) => r.kind === 'unknown');
+    const text = !rs ? 'okunuyor…' : rs.map(describe).join(' | ');
+    return h('li', { class: bad ? 'bad' : '' }, h('strong', {}, p.name), ' — ', text);
   });
 
   return h(
     'section',
     { class: 'card' },
-    h('h2', {}, '2. PDF raporları'),
+    h('h2', {}, '2. PDF raporları / Word dosyası'),
     disabled ? h('p', { class: 'muted' }, 'Önce liste dosyasını seçin.') : null,
     zone,
     items.length > 0 && h('ul', { class: 'files' }, ...items),
@@ -301,7 +325,7 @@ function renderPdfs(): HTMLElement {
             render();
           },
         },
-        'PDF listesini temizle',
+        'Dosya listesini temizle',
       ),
   );
 }
@@ -325,7 +349,7 @@ function renderChange(c: Change): HTMLElement {
 }
 
 function changeTable(changes: Change[]): HTMLElement {
-  const headers = ['Kolon', 'Listedeki değer', 'Yeni değer', 'Kaynak PDF', 'Tarih', 'Durum'];
+  const headers = ['Kolon', 'Listedeki değer', 'Yeni değer', 'Kaynak', 'Tarih', 'Durum'];
   return h(
     'div',
     { class: 'table-wrap' },
@@ -341,16 +365,16 @@ function changeTable(changes: Change[]): HTMLElement {
 function renderPreview(): HTMLElement | null {
   const { plan, list } = state;
   if (!list || state.pdfs.length === 0) return null;
-  if (!plan) return h('section', { class: 'card' }, h('h2', {}, '3. Önizleme'), h('p', {}, 'PDF’ler okunuyor…'));
+  if (!plan) return h('section', { class: 'card' }, h('h2', {}, '3. Önizleme'), h('p', {}, 'Dosyalar okunuyor…'));
 
   const s = plan.summary;
   const parts = [`${s.patients} hasta`, `${s.toWrite} değer yazılacak`];
   if (s.conflicts) parts.push(`${s.conflicts} çakışma`);
   if (s.warnings) parts.push(`${s.warnings} uyarı`);
-  if (s.unrecognized) parts.push(`${s.unrecognized} tanınmayan PDF`);
+  if (s.unrecognized) parts.push(`${s.unrecognized} tanınmayan dosya`);
 
   const order = (col: string) => {
-    const i = findVariable(list.sav, col);
+    const i = findColumn(list.sav, col);
     return i < 0 ? 1e9 : i;
   };
 
@@ -365,10 +389,21 @@ function renderPreview(): HTMLElement | null {
         'h3',
         {},
         p.name || '(isimsiz)',
-        h('span', { class: 'fileno' }, ` · Dosya No ${p.fileNo}`),
-        h('span', { class: `badge ${p.isNew ? 'new' : 'old'}` }, p.isNew ? 'Yeni hasta' : 'Mevcut hasta'),
+        p.fileNo && h('span', { class: 'fileno' }, ` · Dosya No ${p.fileNo}`),
+        p.isNew
+          ? h('span', { class: 'badge new' }, 'Yeni hasta')
+          : p.rowIndex !== null
+            ? h('span', { class: 'badge old' }, 'Mevcut hasta')
+            : h('span', { class: 'badge bad' }, 'Eşleşmedi'),
       ),
       ...p.messages.map((m) => h('p', { class: 'warn' }, `⚠️ ${m}`)),
+      p.unrecognized.length > 0 &&
+        h(
+          'details',
+          {},
+          h('summary', {}, `Word’de anlaşılamayan ${p.unrecognized.length} satır (bunlardan hiçbir şey yazılmadı)`),
+          h('ul', { class: 'files' }, ...p.unrecognized.map((l) => h('li', {}, l))),
+        ),
       important.length > 0 ? changeTable(important) : h('p', { class: 'muted' }, 'Yeni veya farklı değer yok.'),
       same.length > 0 &&
         h('details', {}, h('summary', {}, `Listede zaten aynı olan ${same.length} değeri göster`), changeTable(same)),

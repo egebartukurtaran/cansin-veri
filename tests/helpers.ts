@@ -26,13 +26,13 @@ interface PatientFixture {
 }
 
 /** Reads fixtures/patients.json lazily (only inside tests that are not skipped). */
-export function patient(key: 'A' | 'B'): PatientFixture {
+export function patient(key: 'A' | 'B' | 'C'): PatientFixture {
   const all = JSON.parse(fs.readFileSync(fixture('patients.json'), 'utf8'));
   const { name, fileNo, birth, ...dates } = all[key];
   return {
     name,
     fileNo,
-    birth: parseDate(birth)!,
+    birth: birth ? parseDate(birth)! : null!,
     dates: Object.fromEntries(Object.entries(dates).map(([k, v]) => [k, parseDate(v as string)!])),
   };
 }
@@ -50,8 +50,8 @@ export async function parsed(name: string): Promise<ParsedReport> {
 }
 
 /** column → value, only writable observations. */
-export function values(r: ParsedReport): Record<string, number | null> {
-  const out: Record<string, number | null> = {};
+export function values(r: ParsedReport): Record<string, number | string | null> {
+  const out: Record<string, number | string | null> = {};
   for (const o of r.observations) out[o.column] = o.value;
   return out;
 }

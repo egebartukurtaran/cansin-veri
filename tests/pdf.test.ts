@@ -4,7 +4,7 @@ import type { ParsedReport } from '../src/pdf/types';
 
 const merged = async (files: string[]) => {
   const reports = await Promise.all(files.map(parsed));
-  return { reports, v: Object.assign({}, ...reports.map(values)) as Record<string, number | null> };
+  return { reports, v: Object.assign({}, ...reports.map(values)) as Record<string, number | string | null> };
 };
 const obs = (reports: ParsedReport[], column: string) =>
   reports.flatMap((r) => r.observations).find((o) => o.column === column)!;
@@ -22,7 +22,7 @@ describe.skipIf(!hasFixtures(...A_LABS))('lab: patient A', () => {
   test('reference values', async () => {
     const { reports, v } = await merged(A_LABS);
     expect(v).toEqual({
-      AKŞ: 83, Kre: 1.24, eGFR: 47, Ürik_asit: 4.95, Totalprotein: 7.7, Alb: 4.9, Na: 140, K: 3.9,
+      glukoz: 83, Kre: 1.24, eGFR: 47, Ürik_asit: 4.95, Totalprotein: 7.7, Alb: 4.9, Na: 140, K: 3.9,
       Ca: 10.5, PO4: 4.6, AST: 23, ALT: 24, TG: 162, Totalkolesterol: 173, LDL: 75, HDL: 66, TS: 19,
       Hb: 13, PLT: 243, Lökosit: 5990, Nötrofil: 3850, Lenfosit: 1570,
       Ferritin: 31.5, ProBNP: 1072, Spotidraralbuminüri: 61, Spotidrarproteinüri: 209,
@@ -53,7 +53,7 @@ describe.skipIf(!hasFixtures(...B_LABS))('lab: patient B', () => {
 
   test('biochemistry ignores previous results', async () => {
     const v = values(await parsed('b_biyokimya.pdf'));
-    expect(v.AKŞ).toBe(186);
+    expect(v.glukoz).toBe(186);
     expect(v.Kre).toBe(1.85);
     expect(v.K).toBe(4.5);
   });

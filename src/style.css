@@ -268,3 +268,8 @@ details summary {
   color: var(--primary);
   padding: 6px 0;
 }
+
+.badge.bad {
+  background: var(--err-bg);
+  color: var(--err);
+}

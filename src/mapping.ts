@@ -11,7 +11,7 @@ export interface LabMapping {
 
 export const LAB_MAPPING: LabMapping[] = [
   { test: 'Pro-BNP', column: 'ProBNP' },
-  { test: 'Glukoz', column: 'AKŞ' },
+  { test: 'Glukoz', column: 'glukoz' },
   { test: 'Kreatinin', column: 'Kre' },
   { test: 'Glomerüler Filtrasyon Hızı', column: 'eGFR' },
   { test: 'Ürik asit', column: 'Ürik_asit' },
@@ -36,11 +36,17 @@ export const LAB_MAPPING: LabMapping[] = [
   { test: 'Lenfosit# (Lenfosit Sayısı)', column: 'Lenfosit', scale: 3 },
   { test: 'Albümin / Kreatinin (Spot İdrar)', column: 'Spotidraralbuminüri' },
   { test: 'Protein / Kreatinin(Spot İdrar)', column: 'Spotidrarproteinüri' },
-  // Waiting for confirmation (sample PDFs / units to be checked against the list):
-  // { test: 'Parathormon', column: 'PTH' },
-  // { test: '???', column: 'CRP' },
-  // { test: '???', column: 'HCO3' },
+  // Units checked against values already entered in the list (pg/mL, mg/L, mmol/L).
+  { test: 'Parathormon', column: 'PTH' },
+  { test: 'CRP Nefelometrik', column: 'CRP' },
+  { test: 'cHCO3(Pst)c (Venöz)', column: 'HCO3' },
 ];
+
+/**
+ * Columns that were renamed in the list at some point. When writing, the first name that
+ * exists in the opened .sav file is used.
+ */
+export const COLUMN_ALIASES: string[][] = [['glukoz', 'AKŞ']];
 
 /** Echo findings table rows (value taken from the BULGU column). */
 export const ECHO_FINDINGS = {

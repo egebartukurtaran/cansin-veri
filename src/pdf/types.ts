@@ -19,8 +19,8 @@ export interface PatientInfo {
 
 export interface Observation {
   column: string;
-  /** null = found in the PDF but must not be written (see warnings). */
-  value: number | null;
+  /** null = found in the source but must not be written (see warnings). */
+  value: number | string | null;
   /** Text as it appears in the PDF. */
   raw: string;
   /** Where it came from, e.g. the test name. */
@@ -29,12 +29,14 @@ export interface Observation {
 }
 
 export interface ParsedReport {
-  kind: 'lab' | 'eko';
+  kind: 'lab' | 'eko' | 'word';
   fileName: string;
   patient: PatientInfo;
-  /** Lab: Numune Alma Zamanı. Eko: Çekim Tarihi. */
-  date: ReportDate;
+  /** Lab: Numune Alma Zamanı. Eko: Çekim Tarihi. Word: none (null). */
+  date: ReportDate | null;
   observations: Observation[];
+  /** Lines of the source that were not understood (shown in the preview, nothing written). */
+  unrecognized?: string[];
 }
 
 export interface FailedReport {

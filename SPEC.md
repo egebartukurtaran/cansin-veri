@@ -59,6 +59,32 @@ Değerler iki yerden okunur:
 ### 4.3 Tanınmayan PDF
 Ne lab ne eko ise: önizlemede "Tanınmadı: <dosya adı>" uyarısı, hiçbir şey yazılmaz.
 
+### 4.4 Word (.docx) notları
+PDF'lerden elle derlenmiş hasta notları. Bir dosyada bir veya birden fazla hasta olabilir. `.doc` (eski biçim) desteklenmez; kullanıcıya `.docx` olarak kaydetmesi söylenir.
+
+Hasta bloğu: **ad soyad satırı**, hemen altında `Dosya No: ...` veya `Yaş: ...` satırı (yeni hasta bloğu böyle başlar). Tarih yoktur.
+
+| Satır | Kolon | Kural |
+|---|---|---|
+| `Dosya No: 1234567` | eşleştirme | İsteğe bağlı. Yoksa hasta **listedeki isimle** (büyük/küçük harf duyarsız) eşleştirilir; isim listede tek değilse veya yoksa hiçbir şey yazılmaz. Dosya No'suz yeni hasta eklenmez. |
+| `Yaş: 60` | `Yaş` | doğrudan |
+| `kadın` / `erkek` | `CinsiyetK1E2` | 1 / 2 |
+| `<Test Adı> - <değer> <birim>` | §5.2 | Test adı PDF'lerle aynı, **tam eşleşme**; `<`/`>` yazılmaz |
+| `Ef: 60` | `EFyüzde` | |
+| `Kapak patolojisi yok` / `var: eser MY` | `Kapak_patolojisi`, `Kapak_patolojisi_tipi` | yok → 0 ve tipi `"0"`; var → 1 ve tipi = açıklama |
+| `e/a 1den büyük` / `küçük` | `e_a` | 1 / 0 |
+| `... hipertrofi yok/var` | `Sol_ventrikül_hipertrofisi` | 0 / 1; belirsizse yazılmaz |
+| `diyastolik disfonksiyon yok/var` | `Diyastolik_disfonksiyon` | 0 / 1 |
+| `sol atrium 3,3` | `Sol_atriyum_çapı` | |
+| `TAPSE`, `PAB`, `VCI` + sayı; `%50'den fazla/az kollabe` | eko kolonları | §5.3 ile aynı |
+| `kbh süresi: 7` | `KBHsüresi` | |
+| `komorbid: HT, DM, ...` | `Komorbidite` (metin) + `DMYok0Var1`, `HTYok0Var1`, `KAHYok0Var1`, `KOAHYok0Var1`, `SVOYok0Var1` | geçen → 1, geçmeyen → 0 |
+| `Ofis Ta: 145 (skb) /85 (dkb)` | `SKBmmHg`, `DKBmmHg` | |
+| `PTÖ: -` / `+` | `pretibial_odem` | 0 / 1 |
+| `<Listedeki kolon adı>: <değer>` | o kolon | Genel kural: herhangi bir liste kolonu bu şekilde eklenebilir (örn. `Boy: 162`) |
+
+Anlaşılamayan satırlar önizlemede listelenir, hiçbir şey yazılmaz. Birleştirmede Word değerleri tarihsizdir: aynı kolon için en güncel PDF değeriyle farklıysa **çakışma** olur.
+
 ## 5. Kolon eşleştirmesi
 
 ### 5.1 Demografi (yeni hasta eklenirken veya boş hücreye)
@@ -99,7 +125,7 @@ Ne lab ne eko ise: önizlemede "Tanınmadı: <dosya adı>" uyarısı, hiçbir ş
 | `Albümin / Kreatinin (Spot İdrar)` | `Spotidraralbuminüri` | |
 | `Protein / Kreatinin(Spot İdrar)` | `Spotidrarproteinüri` | |
 
-**Örneği henüz olmayanlar** (`PTH`, `CRP`, `HCO3`): Her hastada bulunmuyorlar ve örnek PDF'leri yok. Eşleştirme tablosu **tek bir config dosyasında** (`src/mapping.ts`) tutulsun ki örnek geldiğinde tek satırla eklenebilsin. O zamana kadar bu kolonlara hiçbir şey yazılmaz.
+`Parathormon` → `PTH`, `CRP Nefelometrik` → `CRP`, `cHCO3(Pst)c (Venöz)` → `HCO3` (Word örneğiyle ve listedeki elle girilmiş değerlerle doğrulandı). Listede `AKŞ` kolonunun adı `glukoz` olarak değişti; ikisi de desteklenir (`COLUMN_ALIASES`). Eşleştirme tablosu **tek bir config dosyasında** (`src/mapping.ts`); yeni test tek satırla eklenir.
 
 ### 5.3 Eko
 | Kaynak | `.sav` kolonu | Kural |

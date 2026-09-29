@@ -1,11 +1,12 @@
-import { DEMOGRAPHIC_COLUMNS } from './mapping';
+import { COLUMN_ALIASES, DEMOGRAPHIC_COLUMNS } from './mapping';
 import type { FailedReport, ParsedReport, ReportResult } from './pdf/types';
-import { findVariable, fitsStringVariable, type Cell, type SavFile } from './sav/sav';
+import { fitsStringVariable, type Cell, type SavFile } from './sav/sav';
 import { ageAt, dateKey, formatDate, formatNumber, type ReportDate } from './util';
 
 export type Status = 'write' | 'same' | 'conflict' | 'skip';
 
 export interface Change {
+  /** Column name as it exists in the list (or the requested name if it does not exist). */
   column: string;
   current: Cell;
   proposed: number | string | null;
@@ -22,6 +23,8 @@ export interface PatientPlan {
   isNew: boolean;
   rowIndex: number | null;
   messages: string[];
+  /** Word lines that were not understood (nothing written from them). */
+  unrecognized: string[];
   changes: Change[];
 }
 
@@ -37,9 +40,12 @@ interface Candidate {
   raw: string;
   source: string;
   fileName: string;
-  date: ReportDate;
+  /** null for sources without a date (Word notes). */
+  date: ReportDate | null;
   warnings: string[];
 }
+
+const trUpper = (s: string) => s.normalize('NFC').replace(/\s+/g, ' ').trim().toLocaleUpperCase('tr');
 
 export function displayValue(v: Cell | undefined): string {
   if (v === null || v === undefined || v === '') return '';
@@ -50,10 +56,11 @@ function isEmpty(c: Cell | undefined) {
   return c === null || c === undefined || (typeof c === 'string' && c.trim() === '');
 }
 
-function sameValue(a: Cell, b: number | string): boolean {
+function sameValue(a: Cell, b: number | string, column: string): boolean {
   if (typeof a === 'number' && typeof b === 'number') {
     return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
   }
+  if (column === DEMOGRAPHIC_COLUMNS.name) return trUpper(String(a)) === trUpper(String(b));
   return String(a).trim() === String(b).trim();
 }
 
@@ -62,12 +69,38 @@ function cellKey(v: number | string): string {
 }
 
 function describe(c: Candidate) {
-  return `${c.date ? formatDate(c.date) : '?'}, ${c.fileName}`;
+  return c.date ? `${formatDate(c.date)}, ${c.fileName}` : c.fileName;
+}
+
+/**
+ * Index of a column in the list: exact name, then case-insensitive, then known aliases
+ * (columns renamed over time, e.g. AKŞ → glukoz).
+ */
+export function findColumn(sav: SavFile, name: string): number {
+  const names = sav.variables.map((v) => v.name.normalize('NFC'));
+  const lookup = (n: string) => {
+    const exact = names.indexOf(n.normalize('NFC'));
+    if (exact >= 0) return exact;
+    const l = n.normalize('NFC').toLocaleLowerCase('tr');
+    return names.findIndex((x) => x.toLocaleLowerCase('tr') === l);
+  };
+  const direct = lookup(name);
+  if (direct >= 0) return direct;
+  const lname = name.normalize('NFC').toLocaleLowerCase('tr');
+  const group = COLUMN_ALIASES.find((g) => g.some((a) => a.normalize('NFC').toLocaleLowerCase('tr') === lname));
+  for (const alias of group ?? []) {
+    const i = lookup(alias);
+    if (i >= 0) return i;
+  }
+  return -1;
 }
 
 function resolve(column: string, cands: Candidate[], sav: SavFile, current: Cell): Change {
-  const latestKey = Math.max(...cands.map((c) => dateKey(c.date)));
-  const latest = cands.filter((c) => dateKey(c.date) === latestKey);
+  // Dated sources: only the most recent date counts. Undated (Word) values are compared
+  // against that; any disagreement is a conflict.
+  const dated = cands.filter((c) => c.date !== null);
+  const latestKey = dated.length ? Math.max(...dated.map((c) => dateKey(c.date!))) : null;
+  const latest = [...dated.filter((c) => dateKey(c.date!) === latestKey), ...cands.filter((c) => c.date === null)];
   const head = latest[0];
   const change: Change = {
     column,
@@ -75,31 +108,35 @@ function resolve(column: string, cands: Candidate[], sav: SavFile, current: Cell
     proposed: null,
     source: [...new Set(latest.map((c) => c.source))].join(', '),
     fileName: [...new Set(latest.map((c) => c.fileName))].join(', '),
-    date: head.date,
+    date: latest.find((c) => c.date)?.date ?? null,
     status: 'skip',
     messages: [...new Set(latest.flatMap((c) => c.warnings))],
   };
 
-  const varIdx = findVariable(sav, column);
+  const varIdx = findColumn(sav, column);
   if (varIdx < 0) {
     change.messages.push(`Listede "${column}" kolonu yok`);
     return change;
   }
+  change.column = sav.variables[varIdx].name;
 
   if (latest.some((c) => c.value === null)) {
     if (latest.length > 1 && latest.some((c) => c.value !== null)) {
-      change.messages.push('Aynı tarihli raporlardan biri okunamadı');
+      change.messages.push('Kaynaklardan biri okunamadı');
     }
     return change;
   }
 
   const distinct = new Map<string, Candidate>();
-  for (const c of latest) distinct.set(cellKey(c.value!), c);
+  for (const c of latest) {
+    const key = column === DEMOGRAPHIC_COLUMNS.name ? trUpper(String(c.value)) : cellKey(c.value!);
+    distinct.set(key, c);
+  }
   if (distinct.size > 1) {
     change.status = 'conflict';
     change.messages.push(
-      'Aynı tarihli raporlarda farklı değerler: ' +
-        [...distinct.values()].map((c) => `${displayValue(c.value)} (${c.fileName})`).join(' / '),
+      'Kaynaklar farklı değer veriyor: ' +
+        [...distinct.values()].map((c) => `${displayValue(c.value)} (${describe(c)})`).join(' / '),
     );
     return change;
   }
@@ -109,36 +146,41 @@ function resolve(column: string, cands: Candidate[], sav: SavFile, current: Cell
   if (variable.width > 0) {
     value = typeof value === 'number' ? String(value) : value;
     if (!fitsStringVariable(value, variable)) {
-      change.messages.push(`Değer "${column}" kolonuna sığmıyor`);
+      change.messages.push(`Değer "${change.column}" kolonuna sığmıyor`);
       return change;
     }
   } else if (typeof value !== 'number') {
-    change.messages.push(`"${column}" sayısal bir kolon, "${value}" yazılamaz`);
+    change.messages.push(`"${change.column}" sayısal bir kolon, "${value}" yazılamaz`);
     return change;
   }
   change.proposed = value;
 
   if (isEmpty(current)) change.status = 'write';
-  else if (sameValue(current, value)) change.status = 'same';
+  else if (sameValue(current, value, column)) change.status = 'same';
   else {
     change.status = 'conflict';
     change.messages.push(
-      `Çakışma: listede ${displayValue(current)}, PDF'te ${displayValue(value)} (${describe(head)})`,
+      `Çakışma: listede ${displayValue(current)}, kaynakta ${displayValue(value)} (${describe(head)})`,
     );
   }
   return change;
 }
 
-function findRows(sav: SavFile, fileNo: string): number[] {
-  const idx = findVariable(sav, DEMOGRAPHIC_COLUMNS.fileNo);
-  if (idx < 0) return [];
+function findRows(sav: SavFile, column: string, value: string, normalize: (s: string) => string): number[] {
+  const idx = findColumn(sav, column);
+  if (idx < 0 || !value) return [];
+  const want = normalize(value);
   const out: number[] = [];
   sav.rows.forEach((r, i) => {
     const v = r[idx];
-    if (v !== null && v !== undefined && String(v).trim() === fileNo) out.push(i);
+    if (v !== null && v !== undefined && normalize(String(v)) === want) out.push(i);
   });
   return out;
 }
+
+const byFileNo = (sav: SavFile, fileNo: string) =>
+  findRows(sav, DEMOGRAPHIC_COLUMNS.fileNo, fileNo, (s) => s.trim());
+const byName = (sav: SavFile, name: string) => findRows(sav, DEMOGRAPHIC_COLUMNS.name, name, trUpper);
 
 function demographicCandidates(reports: ParsedReport[], messages: string[]): Candidate[] {
   const out: Candidate[] = [];
@@ -157,23 +199,24 @@ function demographicCandidates(reports: ParsedReport[], messages: string[]): Can
     const sex = r.patient.sex!;
     out.push({ ...base(r), column: DEMOGRAPHIC_COLUMNS.sex, value: sex, raw: sex === 1 ? 'K' : 'E', source: 'Cinsiyet' });
   } else if (sexes.size > 1) {
-    messages.push('Raporlarda cinsiyet farklı görünüyor; cinsiyet yazılmadı');
+    messages.push('Kaynaklarda cinsiyet farklı görünüyor; cinsiyet yazılmadı');
   }
 
   const births = new Map<number, ReportDate>();
   for (const r of reports) if (r.patient.birth) births.set(dateKey(r.patient.birth), r.patient.birth);
+  const datedReports = reports.filter((r) => r.date !== null);
   if (births.size > 1) {
-    messages.push('Raporlarda doğum tarihi farklı görünüyor; yaş yazılmadı');
-  } else if (births.size === 1) {
+    messages.push('Raporlarda doğum tarihi farklı görünüyor; yaş hesaplanmadı');
+  } else if (births.size === 1 && datedReports.length > 0) {
     const birth = [...births.values()][0];
     // Age at the most recent lab sample; echo date only if there is no lab report.
-    const labs = reports.filter((r) => r.kind === 'lab');
-    const pool = labs.length > 0 ? labs : reports;
-    const ref = pool.reduce((a, b) => (dateKey(b.date) > dateKey(a.date) ? b : a));
+    const labs = datedReports.filter((r) => r.kind === 'lab');
+    const pool = labs.length > 0 ? labs : datedReports;
+    const ref = pool.reduce((a, b) => (dateKey(b.date!) > dateKey(a.date!) ? b : a));
     out.push({
       ...base(ref),
       column: DEMOGRAPHIC_COLUMNS.age,
-      value: ageAt(birth, ref.date),
+      value: ageAt(birth, ref.date!),
       raw: formatDate(birth, false),
       source: `Doğum tarihi ${formatDate(birth, false)}`,
     });
@@ -181,38 +224,81 @@ function demographicCandidates(reports: ParsedReport[], messages: string[]): Can
   return out;
 }
 
+interface Group {
+  fileNo: string;
+  rows: number[];
+  reports: ParsedReport[];
+  messages: string[];
+}
+
+/** Assigns every report to a patient: by file number, or (Word without one) by unique name. */
+function groupReports(sav: SavFile, parsed: ParsedReport[]): Group[] {
+  const groups = new Map<string, Group>();
+  const add = (key: string, fileNo: string, rows: number[], r: ParsedReport, message?: string) => {
+    const g = groups.get(key) ?? { fileNo, rows, reports: [], messages: [] };
+    if (!g.fileNo && fileNo) g.fileNo = fileNo;
+    g.reports.push(r);
+    if (message && !g.messages.includes(message)) g.messages.push(message);
+    groups.set(key, g);
+  };
+
+  for (const r of parsed) {
+    if (r.patient.fileNo) {
+      const rows = byFileNo(sav, r.patient.fileNo);
+      add(rows.length === 1 ? `row:${rows[0]}` : `no:${r.patient.fileNo}`, r.patient.fileNo, rows, r);
+      continue;
+    }
+    const rows = byName(sav, r.patient.name);
+    if (rows.length === 1) {
+      add(`row:${rows[0]}`, '', rows, r, `"${r.fileName}" dosyasında Dosya No yok; hasta listedeki isimle eşleştirildi`);
+    } else {
+      add(
+        `name:${trUpper(r.patient.name)}`,
+        '',
+        rows,
+        r,
+        rows.length === 0
+          ? 'Dosya No yok ve listede bu isimde hasta bulunamadı; yeni hasta eklemek için Word’e "Dosya No: ..." satırı ekleyin. Hiçbir değer yazılmadı'
+          : `Dosya No yok ve listede bu isimde ${rows.length} hasta var; Word’e "Dosya No: ..." satırı ekleyin. Hiçbir değer yazılmadı`,
+      );
+    }
+  }
+  // A group keyed by name may belong to a row that another report found by file number.
+  for (const g of groups.values()) {
+    if (g.fileNo && g.rows.length === 0) g.rows = byFileNo(sav, g.fileNo);
+  }
+  return [...groups.values()];
+}
+
 export function buildPlan(sav: SavFile, results: ReportResult[]): Plan {
   const failed = results.filter((r): r is FailedReport => r.kind === 'unknown');
   const parsed = results.filter((r): r is ParsedReport => r.kind !== 'unknown');
 
-  const byPatient = new Map<string, ParsedReport[]>();
-  for (const r of parsed) byPatient.set(r.patient.fileNo, [...(byPatient.get(r.patient.fileNo) ?? []), r]);
-
   const patients: PatientPlan[] = [];
-  for (const [fileNo, reports] of byPatient) {
-    const messages: string[] = [];
-    const rows = findRows(sav, fileNo);
+  for (const { fileNo, rows, reports, messages } of groupReports(sav, parsed)) {
     const rowIndex = rows.length === 1 ? rows[0] : null;
-    const isNew = rows.length === 0;
-    const latestReport = reports.reduce((a, b) => (dateKey(b.date) > dateKey(a.date) ? b : a));
+    const isNew = rows.length === 0 && fileNo !== '';
+    const blocked = rows.length > 1 || (rows.length === 0 && fileNo === '');
+    const dated = reports.filter((r) => r.date !== null);
+    const latestReport = dated.length
+      ? dated.reduce((a, b) => (dateKey(b.date!) > dateKey(a.date!) ? b : a))
+      : reports[0];
 
     const cands: Candidate[] = demographicCandidates(reports, messages);
     for (const r of reports) {
       for (const o of r.observations) {
-        cands.push({
-          column: o.column,
-          value: o.value,
-          raw: o.raw,
-          source: o.source,
-          fileName: r.fileName,
-          date: r.date,
-          warnings: o.warnings,
-        });
+        cands.push({ column: o.column, value: o.value, raw: o.raw, source: o.source, fileName: r.fileName, date: r.date, warnings: o.warnings });
       }
     }
 
-    const byColumn = new Map<string, Candidate[]>();
-    for (const c of cands) byColumn.set(c.column, [...(byColumn.get(c.column) ?? []), c]);
+    const byColumn = new Map<number | string, { column: string; cands: Candidate[] }>();
+    for (const c of cands) {
+      const idx = findColumn(sav, c.column);
+      const key = idx >= 0 ? idx : c.column;
+      const entry = byColumn.get(key) ?? { column: c.column, cands: [] };
+      entry.cands.push(c);
+      byColumn.set(key, entry);
+    }
 
     const changes: Change[] = [];
     if (isNew) {
@@ -220,34 +306,36 @@ export function buildPlan(sav: SavFile, results: ReportResult[]): Plan {
         column: DEMOGRAPHIC_COLUMNS.fileNo,
         current: null,
         proposed: fileNo,
-        source: 'Protokol / Dosya No',
+        source: 'Dosya No',
         fileName: latestReport.fileName,
         date: latestReport.date,
         status: 'write',
         messages: [],
       });
     }
-    for (const [column, cs] of byColumn) {
-      const idx = findVariable(sav, column);
-      const current = rowIndex !== null && idx >= 0 ? sav.rows[rowIndex][idx] : null;
+    for (const [key, { column, cands: cs }] of byColumn) {
+      const current = rowIndex !== null && typeof key === 'number' ? sav.rows[rowIndex][key] : null;
       changes.push(resolve(column, cs, sav, current));
     }
 
-    if (rows.length > 1) {
+    if (rows.length > 1 && fileNo) {
       messages.push(`Bu dosya numarası listede ${rows.length} satırda var; hiçbir değer yazılmadı`);
-      for (const c of changes) {
-        if (c.status === 'write') c.status = 'skip';
-      }
+    }
+    if (blocked) {
+      for (const c of changes) if (c.status === 'write') c.status = 'skip';
     }
 
-    const existingName =
-      rowIndex !== null ? displayValue(sav.rows[rowIndex][findVariable(sav, DEMOGRAPHIC_COLUMNS.name)]) : '';
+    const nameIdx = findColumn(sav, DEMOGRAPHIC_COLUMNS.name);
+    const existingName = rowIndex !== null && nameIdx >= 0 ? displayValue(sav.rows[rowIndex][nameIdx]) : '';
+    const fileNoIdx = findColumn(sav, DEMOGRAPHIC_COLUMNS.fileNo);
+    const existingFileNo = rowIndex !== null && fileNoIdx >= 0 ? displayValue(sav.rows[rowIndex][fileNoIdx]) : '';
     patients.push({
-      fileNo,
+      fileNo: fileNo || existingFileNo,
       name: latestReport.patient.name || existingName,
       isNew,
       rowIndex,
       messages,
+      unrecognized: [...new Set(reports.flatMap((r) => r.unrecognized ?? []))],
       changes,
     });
   }
@@ -282,7 +370,7 @@ export function applyPlan(sav: SavFile, plan: Plan): SavFile {
       row = rows[p.rowIndex];
     } else continue;
     for (const c of writes) {
-      const idx = findVariable(sav, c.column);
+      const idx = findColumn(sav, c.column);
       if (idx >= 0 && c.proposed !== null) row[idx] = c.proposed;
     }
   }
