@@ -1,7 +1,7 @@
 import './style.css';
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { applyPlan, buildPlan, displayValue, findColumn, type Change, type Plan, type Status } from './merge';
+import { applyPlan, buildPlan, displayValue, findColumn, summarize, type PatientPlan, type Change, type Plan, type Status } from './merge';
 import { extractItems, parseItems, type PdfDocument } from './pdf/parse';
 import type { ReportResult } from './pdf/types';
 import { findVariable, readSav, writeSav, type SavFile } from './sav/sav';
@@ -32,6 +32,8 @@ const state = {
   message: null as { kind: 'ok' | 'error'; text: string } | null,
   recent: null as FileSystemFileHandle | null,
   busy: false,
+  /** Overrides the user unticked, kept across recomputes. Key: changeKey(). */
+  unticked: new Set<string>(),
 };
 
 const hasFsAccess = typeof window.showOpenFilePicker === 'function' && typeof window.showSaveFilePicker === 'function';
@@ -63,11 +65,30 @@ function setMessage(kind: 'ok' | 'error', text: string) {
   state.message = { kind, text };
 }
 
+const changeKey = (p: PatientPlan, c: Change) => `${p.rowIndex ?? p.fileNo ?? p.name}|${c.column}`;
+
 function recompute() {
   state.plan =
     state.list && state.pdfs.length > 0 && state.pdfs.every((p) => p.results)
       ? buildPlan(state.list.sav, state.pdfs.flatMap((p) => p.results!))
       : null;
+  applySelection();
+}
+
+function applySelection() {
+  const plan = state.plan;
+  if (!plan) return;
+  for (const p of plan.patients) for (const c of p.changes) c.selected = !state.unticked.has(changeKey(p, c));
+  plan.summary = summarize(plan.patients, plan.failed.length);
+}
+
+function setOverride(keys: string[], selected: boolean) {
+  for (const k of keys) {
+    if (selected) state.unticked.delete(k);
+    else state.unticked.add(k);
+  }
+  applySelection();
+  render();
 }
 
 async function loadList(file: File, handle: FileSystemFileHandle | null) {
@@ -232,6 +253,7 @@ async function save() {
     }
     const n = plan.summary.toWrite;
     state.pdfs = [];
+    state.unticked.clear();
     setMessage('ok', `Kaydedildi: ${state.list.name} (${n} değer yazıldı). Bu dosya artık kullanılan liste.`);
   } catch (e) {
     setMessage('error', `Kaydedilemedi: ${(e as Error).message}`);
@@ -246,6 +268,7 @@ async function save() {
 
 const STATUS_LABEL: Record<Status, string> = {
   write: '✅ Yazılacak',
+  override: '🔁 Üzerine yazılacak (Word)',
   same: '⚪ Zaten aynı',
   conflict: '⚠️ Çakışma (yazılmayacak)',
   skip: '⚠️ Uyarı (yazılmayacak)',
@@ -321,6 +344,7 @@ function renderPdfs(): HTMLElement {
           class: 'secondary',
           onclick: () => {
             state.pdfs = [];
+            state.unticked.clear();
             recompute();
             render();
           },
@@ -330,11 +354,19 @@ function renderPdfs(): HTMLElement {
   );
 }
 
-function renderChange(c: Change): HTMLElement {
+function renderChange(p: PatientPlan, c: Change): HTMLElement {
+  const box =
+    c.status === 'override' &&
+    h('input', {
+      type: 'checkbox',
+      checked: c.selected,
+      title: 'İşareti kaldırırsanız listedeki değer korunur',
+      onchange: (e: Event) => setOverride([changeKey(p, c)], (e.target as HTMLInputElement).checked),
+    });
   return h(
     'tr',
-    { class: `st-${c.status}` },
-    h('td', {}, c.column),
+    { class: `st-${c.status}${c.status === 'override' && !c.selected ? ' off' : ''}` },
+    h('td', {}, box ? h('label', { class: 'pick' }, box, ' ', c.column) : c.column),
     h('td', {}, displayValue(c.current)),
     h('td', { class: 'new' }, displayValue(c.proposed)),
     h('td', { class: 'src' }, c.source, h('br'), h('small', {}, c.fileName)),
@@ -342,13 +374,13 @@ function renderChange(c: Change): HTMLElement {
     h(
       'td',
       {},
-      STATUS_LABEL[c.status],
+      c.status === 'override' && !c.selected ? '⚪ Listedeki değer korunacak' : STATUS_LABEL[c.status],
       ...c.messages.map((m) => h('div', { class: 'msg' }, (c.status === 'write' ? '⚠️ ' : '') + m)),
     ),
   );
 }
 
-function changeTable(changes: Change[]): HTMLElement {
+function changeTable(p: PatientPlan, changes: Change[]): HTMLElement {
   const headers = ['Kolon', 'Listedeki değer', 'Yeni değer', 'Kaynak', 'Tarih', 'Durum'];
   return h(
     'div',
@@ -357,7 +389,7 @@ function changeTable(changes: Change[]): HTMLElement {
       'table',
       {},
       h('thead', {}, h('tr', {}, ...headers.map((t) => h('th', {}, t)))),
-      h('tbody', {}, ...changes.map(renderChange)),
+      h('tbody', {}, ...changes.map((c) => renderChange(p, c))),
     ),
   );
 }
@@ -369,6 +401,10 @@ function renderPreview(): HTMLElement | null {
 
   const s = plan.summary;
   const parts = [`${s.patients} hasta`, `${s.toWrite} değer yazılacak`];
+  if (s.overrides) {
+    const ticked = plan.patients.flatMap((p) => p.changes).filter((c) => c.status === 'override' && c.selected).length;
+    parts.push(`${ticked}/${s.overrides} farklı değer Word’e göre değiştirilecek`);
+  }
   if (s.conflicts) parts.push(`${s.conflicts} çakışma`);
   if (s.warnings) parts.push(`${s.warnings} uyarı`);
   if (s.unrecognized) parts.push(`${s.unrecognized} tanınmayan dosya`);
@@ -404,9 +440,9 @@ function renderPreview(): HTMLElement | null {
           h('summary', {}, `Word’de anlaşılamayan ${p.unrecognized.length} satır (bunlardan hiçbir şey yazılmadı)`),
           h('ul', { class: 'files' }, ...p.unrecognized.map((l) => h('li', {}, l))),
         ),
-      important.length > 0 ? changeTable(important) : h('p', { class: 'muted' }, 'Yeni veya farklı değer yok.'),
+      important.length > 0 ? changeTable(p, important) : h('p', { class: 'muted' }, 'Yeni veya farklı değer yok.'),
       same.length > 0 &&
-        h('details', {}, h('summary', {}, `Listede zaten aynı olan ${same.length} değeri göster`), changeTable(same)),
+        h('details', {}, h('summary', {}, `Listede zaten aynı olan ${same.length} değeri göster`), changeTable(p, same)),
     );
   });
 
@@ -415,9 +451,26 @@ function renderPreview(): HTMLElement | null {
     { class: 'card' },
     h('h2', {}, '3. Önizleme'),
     h('p', { class: 'summary' }, parts.join(', ')),
+    ...overrideControls(plan),
     ...plan.failed.map((f) => h('p', { class: 'warn' }, `⚠️ Tanınmadı: ${f.fileName} — ${f.reason}`)),
     ...cards,
   );
+}
+
+function overrideControls(plan: NonNullable<typeof state.plan>): HTMLElement[] {
+  const keys = plan.patients.flatMap((p) =>
+    p.changes.filter((c) => c.status === 'override').map((c) => changeKey(p, c)),
+  );
+  if (keys.length === 0) return [];
+  return [
+    h(
+      'div',
+      { class: 'row override-bar' },
+      h('p', {}, `🔁 Word’deki değer listedekinden farklı: ${keys.length} satır. İşaretli olanlarda Word’deki değer yazılır.`),
+      h('button', { class: 'secondary', onclick: () => setOverride(keys, true) }, 'Hepsini işaretle'),
+      h('button', { class: 'secondary', onclick: () => setOverride(keys, false) }, 'Hiçbirini değiştirme'),
+    ),
+  ];
 }
 
 function renderSave(): HTMLElement | null {

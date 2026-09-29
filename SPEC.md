@@ -83,7 +83,9 @@ Hasta bloğu: **ad soyad satırı**, hemen altında `Dosya No: ...` veya `Yaş: 
 | `PTÖ: -` / `+` | `pretibial_odem` | 0 / 1 |
 | `<Listedeki kolon adı>: <değer>` | o kolon | Genel kural: herhangi bir liste kolonu bu şekilde eklenebilir (örn. `Boy: 162`) |
 
-Anlaşılamayan satırlar önizlemede listelenir, hiçbir şey yazılmaz. Birleştirmede Word değerleri tarihsizdir: aynı kolon için en güncel PDF değeriyle farklıysa **çakışma** olur.
+Anlaşılamayan satırlar önizlemede listelenir, hiçbir şey yazılmaz.
+
+**Word önceliklidir** (elle kontrol edilmiş kaynak): Word'deki okunabilir değer PDF'lerdeki değere ve listedeki dolu değere göre esas alınır. Listedeki dolu ve farklı bir değerin üzerine yazılacaksa önizlemede "🔁 Üzerine yazılacak" satırı olarak, **varsayılan işaretli** bir kutuyla gösterilir; işaret kaldırılırsa listedeki değer korunur ("Hepsini işaretle" / "Hiçbirini değiştirme" butonları var). İki Word dosyası aynı kolona farklı değer verirse çakışma olur, yazılmaz. Sadece PDF kaynaklı çakışmalarda kural değişmedi (§6): üzerine yazılmaz.
 
 ## 5. Kolon eşleştirmesi
 

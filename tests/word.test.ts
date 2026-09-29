@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 import { describe, expect, test } from 'vitest';
-import { applyPlan, buildPlan, findColumn, type Plan } from '../src/merge';
+import { applyPlan, buildPlan, findColumn, summarize, type Plan } from '../src/merge';
 import { readSav, type SavFile } from '../src/sav/sav';
 import { documentLines, readDocxLines } from '../src/word/docx';
 import { parseTypedNumber, parseWordLines, parseYesNo } from '../src/word/notes';
@@ -170,7 +170,7 @@ describe('merge with Word', () => {
     expect(out.rows).toEqual([['AYŞE YILDIZ', '999', 1, 60, null, 'ht']]);
   });
 
-  test('Word and PDF disagreeing on the same column → conflict', () => {
+  test('Word wins over a PDF (on an empty cell it is a normal write, with a note)', () => {
     const sav = fakeSav([{ Adsoyad: 'AYŞE YILDIZ', DosyaNo: '555' }]);
     const word = parseWordLines(['AYŞE YILDIZ', 'Yaş: 60', 'Kreatinin - 1,25'], 'w.docx', COLUMNS);
     const pdf = {
@@ -180,7 +180,43 @@ describe('merge with Word', () => {
     };
     const plan = buildPlan(sav, [...word, pdf]);
     expect(plan.patients).toHaveLength(1);
+    const c = change(plan, 'Kre');
+    expect(c.status).toBe('write');
+    expect(c.proposed).toBe(1.25);
+    expect(c.messages.join()).toMatch(/PDF'te 1,3/);
+  });
+
+  test('Word replaces a different list value only while ticked', () => {
+    const sav = fakeSav([{ Adsoyad: 'AYŞE YILDIZ', DosyaNo: '555', Kre: 1.3, Yaş: 60 }]);
+    const plan = buildPlan(sav, parseWordLines(['AYŞE YILDIZ', 'Yaş: 60', 'Kreatinin - 1,25'], 'w.docx', COLUMNS));
+    const c = change(plan, 'Kre');
+    expect(c.status).toBe('override');
+    expect(c.selected).toBe(true);
+    expect(plan.summary.toWrite).toBe(1);
+    expect(applyPlan(sav, plan).rows[0][4]).toBe(1.25);
+
+    c.selected = false;
+    expect(summarize(plan.patients, 0).toWrite).toBe(0);
+    expect(applyPlan(sav, plan).rows[0][4]).toBe(1.3);
+  });
+
+  test('two Word files disagreeing → conflict, nothing written', () => {
+    const sav = fakeSav([{ Adsoyad: 'AYŞE YILDIZ', DosyaNo: '555' }]);
+    const plan = buildPlan(sav, [
+      ...parseWordLines(['AYŞE YILDIZ', 'Yaş: 60', 'Kreatinin - 1,25'], 'a.docx', COLUMNS),
+      ...parseWordLines(['AYŞE YILDIZ', 'Yaş: 60', 'Kreatinin - 1,4'], 'b.docx', COLUMNS),
+    ]);
     expect(change(plan, 'Kre').status).toBe('conflict');
+  });
+
+  test('PDF-only conflicts with the list are still not overwritten', () => {
+    const sav = fakeSav([{ Adsoyad: 'AYŞE YILDIZ', DosyaNo: '555', Kre: 2 }]);
+    const pdf = {
+      kind: 'lab' as const, fileName: 'lab.pdf', date: { year: 2026, month: 3, day: 1, hour: 0, minute: 0 },
+      patient: { name: 'AYŞE YILDIZ', fileNo: '555', birth: null, sex: null },
+      observations: [{ column: 'Kre', value: 1.3, raw: '1,3', source: 'Kreatinin', warnings: [] }],
+    };
+    expect(change(buildPlan(sav, [pdf]), 'Kre').status).toBe('conflict');
   });
 
   test('renamed column alias (AKŞ ↔ glukoz)', () => {
@@ -194,7 +230,7 @@ describe('merge with Word', () => {
 // ---- real Word file against the hand-entered list ----
 
 describe.skipIf(!hasFixtures('c_word.docx', 'liste2.sav'))('real Word file', () => {
-  test('matches the values entered by hand; differences are conflicts', async () => {
+  test('matches the values entered by hand; differences become ticked overrides', async () => {
     const sav = readSav(new Uint8Array(fs.readFileSync(fixture('liste2.sav'))));
     const lines = await readDocxLines(new Uint8Array(fs.readFileSync(fixture('c_word.docx'))));
     const reports = parseWordLines(lines, 'c_word.docx', sav.variables.map((v) => v.name));
@@ -203,9 +239,10 @@ describe.skipIf(!hasFixtures('c_word.docx', 'liste2.sav'))('real Word file', () 
     const p = plan.patients[0];
     expect(p.fileNo).toBe(patient('C').fileNo);
     expect(p.unrecognized).toEqual(['Kan Üre Azotu (BUN) - 21 mg/dL']);
-    const conflicts = p.changes.filter((c) => c.status === 'conflict').map((c) => c.column).sort();
-    expect(conflicts).toEqual(['CRP', 'Ferritin', 'HCO3', 'PTH', 'Spotidrarproteinüri', 'Ürik_asit'].sort());
+    const overrides = p.changes.filter((c) => c.status === 'override').map((c) => c.column).sort();
+    expect(overrides).toEqual(['CRP', 'Ferritin', 'HCO3', 'PTH', 'Spotidrarproteinüri', 'Ürik_asit'].sort());
     expect(p.changes.filter((c) => c.status === 'same')).toHaveLength(43);
-    expect(plan.summary.toWrite).toBe(0);
+    expect(plan.summary.conflicts).toBe(0);
+    expect(plan.summary.toWrite).toBe(6);
   });
 });

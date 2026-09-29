@@ -3,7 +3,8 @@ import type { FailedReport, ParsedReport, ReportResult } from './pdf/types';
 import { fitsStringVariable, type Cell, type SavFile } from './sav/sav';
 import { ageAt, dateKey, formatDate, formatNumber, type ReportDate } from './util';
 
-export type Status = 'write' | 'same' | 'conflict' | 'skip';
+/** override = a Word value replaces a different value already in the list (user can untick). */
+export type Status = 'write' | 'override' | 'same' | 'conflict' | 'skip';
 
 export interface Change {
   /** Column name as it exists in the list (or the requested name if it does not exist). */
@@ -14,6 +15,8 @@ export interface Change {
   fileName: string;
   date: ReportDate | null;
   status: Status;
+  /** Only meaningful for 'override': whether the user keeps it ticked (default true). */
+  selected: boolean;
   messages: string[];
 }
 
@@ -31,7 +34,17 @@ export interface PatientPlan {
 export interface Plan {
   patients: PatientPlan[];
   failed: FailedReport[];
-  summary: { patients: number; toWrite: number; conflicts: number; warnings: number; unrecognized: number };
+  summary: Summary;
+}
+
+export interface Summary {
+  patients: number;
+  /** New values plus ticked overrides. */
+  toWrite: number;
+  overrides: number;
+  conflicts: number;
+  warnings: number;
+  unrecognized: number;
 }
 
 interface Candidate {
@@ -43,6 +56,8 @@ interface Candidate {
   /** null for sources without a date (Word notes). */
   date: ReportDate | null;
   warnings: string[];
+  /** From a Word note: checked by hand, so it takes precedence (see resolve). */
+  fromWord: boolean;
 }
 
 const trUpper = (s: string) => s.normalize('NFC').replace(/\s+/g, ' ').trim().toLocaleUpperCase('tr');
@@ -96,6 +111,31 @@ export function findColumn(sav: SavFile, name: string): number {
 }
 
 function resolve(column: string, cands: Candidate[], sav: SavFile, current: Cell): Change {
+  // Word notes are checked by hand: when they give a readable value, they win over PDFs and
+  // over the list (shown as an 'override' the user can untick).
+  const word = cands.filter((c) => c.fromWord && c.value !== null);
+  if (word.length > 0) {
+    const change = resolveDated(column, word, sav, current);
+    const others = cands.filter((c) => !c.fromWord && c.value !== null);
+    if (others.length > 0 && change.proposed !== null) {
+      const pdf = resolveDated(column, others, sav, null);
+      if (pdf.proposed !== null && !sameValue(pdf.proposed, change.proposed, column)) {
+        change.messages.push(`PDF'te ${displayValue(pdf.proposed)} (${pdf.fileName}) — Word'deki değer esas alındı`);
+      }
+    }
+    if (change.status === 'conflict' && change.proposed !== null) {
+      // Differs from the list only (Word sources agree among themselves).
+      change.status = 'override';
+      change.messages = change.messages.filter((m) => !m.startsWith('Çakışma:'));
+      change.messages.unshift(`Listede ${displayValue(current)} → Word'deki ${displayValue(change.proposed)} yazılacak`);
+    }
+    return change;
+  }
+  const nonWord = cands.filter((c) => !c.fromWord);
+  return resolveDated(column, nonWord.length > 0 ? nonWord : cands, sav, current);
+}
+
+function resolveDated(column: string, cands: Candidate[], sav: SavFile, current: Cell): Change {
   // Dated sources: only the most recent date counts. Undated (Word) values are compared
   // against that; any disagreement is a conflict.
   const dated = cands.filter((c) => c.date !== null);
@@ -110,6 +150,7 @@ function resolve(column: string, cands: Candidate[], sav: SavFile, current: Cell
     fileName: [...new Set(latest.map((c) => c.fileName))].join(', '),
     date: latest.find((c) => c.date)?.date ?? null,
     status: 'skip',
+    selected: true,
     messages: [...new Set(latest.flatMap((c) => c.warnings))],
   };
 
@@ -184,7 +225,7 @@ const byName = (sav: SavFile, name: string) => findRows(sav, DEMOGRAPHIC_COLUMNS
 
 function demographicCandidates(reports: ParsedReport[], messages: string[]): Candidate[] {
   const out: Candidate[] = [];
-  const base = (r: ParsedReport) => ({ fileName: r.fileName, date: r.date, warnings: [] as string[] });
+  const base = (r: ParsedReport) => ({ fileName: r.fileName, date: r.date, warnings: [] as string[], fromWord: r.kind === 'word' });
 
   for (const r of reports) {
     if (r.patient.name) {
@@ -287,7 +328,10 @@ export function buildPlan(sav: SavFile, results: ReportResult[]): Plan {
     const cands: Candidate[] = demographicCandidates(reports, messages);
     for (const r of reports) {
       for (const o of r.observations) {
-        cands.push({ column: o.column, value: o.value, raw: o.raw, source: o.source, fileName: r.fileName, date: r.date, warnings: o.warnings });
+        cands.push({
+          column: o.column, value: o.value, raw: o.raw, source: o.source, fileName: r.fileName, date: r.date,
+          warnings: o.warnings, fromWord: r.kind === 'word',
+        });
       }
     }
 
@@ -310,6 +354,7 @@ export function buildPlan(sav: SavFile, results: ReportResult[]): Plan {
         fileName: latestReport.fileName,
         date: latestReport.date,
         status: 'write',
+        selected: true,
         messages: [],
       });
     }
@@ -322,7 +367,7 @@ export function buildPlan(sav: SavFile, results: ReportResult[]): Plan {
       messages.push(`Bu dosya numarası listede ${rows.length} satırda var; hiçbir değer yazılmadı`);
     }
     if (blocked) {
-      for (const c of changes) if (c.status === 'write') c.status = 'skip';
+      for (const c of changes) if (c.status === 'write' || c.status === 'override') c.status = 'skip';
     }
 
     const nameIdx = findColumn(sav, DEMOGRAPHIC_COLUMNS.name);
@@ -340,18 +385,25 @@ export function buildPlan(sav: SavFile, results: ReportResult[]): Plan {
     });
   }
 
+  const plan: Plan = { patients, failed, summary: summarize(patients, failed.length) };
+  return plan;
+}
+
+/** Recomputes the summary (call again after the user ticks / unticks overrides). */
+export function summarize(patients: PatientPlan[], unrecognized: number): Summary {
   const all = patients.flatMap((p) => p.changes);
   return {
-    patients,
-    failed,
-    summary: {
-      patients: patients.length,
-      toWrite: all.filter((c) => c.status === 'write').length,
-      conflicts: all.filter((c) => c.status === 'conflict').length,
-      warnings: all.filter((c) => c.status === 'skip' || (c.status === 'write' && c.messages.length > 0)).length,
-      unrecognized: failed.length,
-    },
+    patients: patients.length,
+    toWrite: all.filter(willWrite).length,
+    overrides: all.filter((c) => c.status === 'override').length,
+    conflicts: all.filter((c) => c.status === 'conflict').length,
+    warnings: all.filter((c) => c.status === 'skip' || (c.status === 'write' && c.messages.length > 0)).length,
+    unrecognized,
   };
+}
+
+export function willWrite(c: Change): boolean {
+  return c.status === 'write' || (c.status === 'override' && c.selected);
 }
 
 /** Returns a new SavFile with all 'write' changes applied. The input is not modified. */
@@ -360,7 +412,7 @@ export function applyPlan(sav: SavFile, plan: Plan): SavFile {
   const emptyRow = (): Cell[] => sav.variables.map((v) => (v.width === 0 ? null : ''));
 
   for (const p of plan.patients) {
-    const writes = p.changes.filter((c) => c.status === 'write');
+    const writes = p.changes.filter(willWrite);
     if (writes.length === 0) continue;
     let row: Cell[];
     if (p.isNew) {

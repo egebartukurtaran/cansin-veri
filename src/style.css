@@ -273,3 +273,36 @@ details summary {
   background: var(--err-bg);
   color: var(--err);
 }
+
+tr.st-override {
+  background: #e8f0ff;
+}
+
+tr.st-override.off {
+  background: transparent;
+  color: var(--muted);
+}
+
+label.pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+label.pick input {
+  width: 18px;
+  height: 18px;
+}
+
+.override-bar {
+  background: #e8f0ff;
+  border-radius: 8px;
+  padding: 8px 14px;
+  margin-bottom: 10px;
+}
+
+.override-bar p {
+  margin: 0;
+  flex: 1 1 300px;
+}
