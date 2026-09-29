@@ -77,12 +77,12 @@ Hasta bloğu: **ad soyad satırı**, hemen altında `Dosya No: ...` veya `Yaş: 
 | `sol atrium 3,3` | `Sol_atriyum_çapı` | |
 | `TAPSE`, `PAB`, `VCI` + sayı; `%50'den fazla/az kollabe` | eko kolonları | §5.3 ile aynı |
 | `kbh süresi: 7` | `KBHsüresi` | |
-| `komorbid: HT, DM, ...` | `Komorbidite` (metin) + `DMYok0Var1`, `HTYok0Var1`, `KAHYok0Var1`, `KOAHYok0Var1`, `SVOYok0Var1` | geçen → 1, geçmeyen → 0 |
+| `Komorbidite: HT, DM`, `KOMORBİDİTE - HT` (tablo), `Ek hastalıklar:`, `Özgeçmiş:`, ya da `Komorbidite:` altında `- HT` / `- DM` madde listesi; `yok` → hepsi 0 | `Komorbidite` (metin) + `DMYok0Var1`, `HTYok0Var1`, `KAHYok0Var1`, `KOAHYok0Var1`, `SVOYok0Var1` | geçen → 1, geçmeyen → 0 |
 | `Ofis Ta: 145 (skb) /85 (dkb)` | `SKBmmHg`, `DKBmmHg` | |
 | `PTÖ: -` / `+` | `pretibial_odem` | 0 / 1 |
 | `<Listedeki kolon adı>: <değer>` | o kolon | Genel kural: herhangi bir liste kolonu bu şekilde eklenebilir (örn. `Boy: 162`) |
 
-Anlaşılamayan satırlar önizlemede listelenir, hiçbir şey yazılmaz.
+Anlaşılamayan satırlar önizlemede listelenir, hiçbir şey yazılmaz. Büyük harf ve Türkçe `İ` ile yazılmış satırlar da tanınır. Metin kolonlarında büyük/küçük harf farkı (`ht, dm` / `HT, DM`) çakışma sayılmaz.
 
 **Word önceliklidir** (elle kontrol edilmiş kaynak): Word'deki okunabilir değer PDF'lerdeki değere ve listedeki dolu değere göre esas alınır. Listedeki dolu ve farklı bir değerin üzerine yazılacaksa önizlemede "🔁 Üzerine yazılacak" satırı olarak, **varsayılan işaretli** bir kutuyla gösterilir; işaret kaldırılırsa listedeki değer korunur ("Hepsini işaretle" / "Hiçbirini değiştirme" butonları var). İki Word dosyası aynı kolona farklı değer verirse çakışma olur, yazılmaz. Sadece PDF kaynaklı çakışmalarda kural değişmedi (§6): üzerine yazılmaz.
 

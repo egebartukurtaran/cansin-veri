@@ -70,6 +70,24 @@ const COMORBIDITY_FLAGS: [string, RegExp][] = [
   ['SVOYok0Var1', word('svo|sva|inme|serebrovasküler')],
 ];
 
+/**
+ * Regexes with the i flag do not match Turkish "İ" against "i". Replacing it keeps the string
+ * length, so positions found in the folded text are valid in the original.
+ */
+const fold = (s: string) => s.replace(/İ/g, 'i');
+
+const KOMORBID =
+  /^(?:komorbid(?:ite|iteler|iteleri)?|ek\s+hastal[ıi]k(?:lar[ıi]?|[ıi])?|eşlik\s+eden\s+hastal[ıi]k(?:lar[ıi]?)?|kronik\s+hastal[ıi]k(?:lar[ıi]?)?|özgeçmiş(?:i)?|öz\s*geçmiş(?:i)?)\s*[:=\-–]?\s*(.*)$/i;
+
+function emitComorbidity(text: string, raw: string, emit: Emit) {
+  const t = text.replace(/[\s,;]+$/, '').trim();
+  const none = t === '' || parseYesNo(t) === 0;
+  if (!none) emit('Komorbidite', t, 'Komorbidite', raw);
+  for (const [column, re] of COMORBIDITY_FLAGS) {
+    emit(column, none ? 0 : re.test(fold(t)) ? 1 : 0, 'Komorbidite satırından', raw);
+  }
+}
+
 const RULES: Rule[] = [
   { test: /^eko\s*:?\s*$/i, apply: () => {} },
   {
@@ -79,7 +97,7 @@ const RULES: Rule[] = [
   {
     test: /^kapak\s+patolojisi\s*[:=]?\s*(.*)$/i,
     apply: (m, emit, line) => {
-      const rest = m[1].trim();
+      const rest = line.slice(line.length - m[1].length).trim();
       const yn = parseYesNo(rest.split(/[\s,(:]/)[0] ?? '');
       if (yn === 0) {
         emit('Kapak_patolojisi', 0, 'Kapak patolojisi', line);
@@ -128,17 +146,6 @@ const RULES: Rule[] = [
   {
     test: new RegExp(`^kbh\\s*süre(?:si)?\\s*[:=]?\\s*${NUM}`, 'i'),
     apply: numberRule('KBHsüresi', 'KBH süresi'),
-  },
-  {
-    test: /^komorbid(?:ite|iteler)?\s*[:=]?\s*(.*)$/i,
-    apply: (m, emit, line) => {
-      const text = m[1].trim();
-      const none = text === '' || parseYesNo(text) === 0;
-      if (!none) emit('Komorbidite', text, 'Komorbid', line);
-      for (const [column, re] of COMORBIDITY_FLAGS) {
-        emit(column, none ? 0 : re.test(text) ? 1 : 0, 'Komorbid satırından', line);
-      }
-    },
   },
   {
     test: /^(?:ofis\s*)?(?:ta|tansiyon|kb)\s*[:=]?\s*(\d{2,3})\s*(?:\(\s*skb\s*\))?\s*\/\s*(\d{2,3})/i,
@@ -256,7 +263,8 @@ function isKnown(line: string, columns: Map<string, string>): boolean {
   const noop: Emit = () => {};
   return (
     isHeaderLike(line) ||
-    RULES.some((r) => r.test.test(line)) ||
+    KOMORBID.test(fold(line)) ||
+    RULES.some((r) => r.test.test(fold(line))) ||
     tryLab(line, noop) ||
     tryColumn(line, columns, noop)
   );
@@ -307,7 +315,30 @@ export function parseWordLines(rawLines: string[], fileName: string, columnNames
     };
     if (head.info) takeInfo(head.info, name);
 
+    // "Komorbidite:" with the list on the following lines ("- HT", "- DM", ...).
+    let comorbidity: { lines: string[]; raw: string } | null = null;
+    const flushComorbidity = () => {
+      if (comorbidity) emitComorbidity(comorbidity.lines.join(', '), comorbidity.raw, emit);
+      comorbidity = null;
+    };
+
     for (const line of body) {
+      // Continuation items: short list entries, not "X: value" / "X - 12 unit" lines.
+      const looksLikeItem = !/[:=]\s*\S/.test(line) && !/\s[-–—]\s*\d/.test(line) && line.length <= 80;
+      if (comorbidity && looksLikeItem && !isKnown(line, columns)) {
+        const item = line.replace(/^[-–•*·]+\s*|^\d+[.)]\s*/, '').trim();
+        if (item) comorbidity.lines.push(item);
+        comorbidity.raw += ` / ${line}`;
+        continue;
+      }
+      flushComorbidity();
+      const kom = KOMORBID.exec(fold(line));
+      if (kom) {
+        const text = line.slice(line.length - kom[1].length).trim();
+        if (text === '') comorbidity = { lines: [], raw: line };
+        else emitComorbidity(text, line, emit);
+        continue;
+      }
       const fileNo = FILE_NO.exec(line);
       if (fileNo) {
         patient.fileNo = fileNo[1];
@@ -319,14 +350,16 @@ export function parseWordLines(rawLines: string[], fileName: string, columnNames
         continue;
       }
       if (tryLab(line, emit)) continue;
-      const rule = RULES.find((r) => r.test.test(line));
+      const folded = fold(line);
+      const rule = RULES.find((r) => r.test.test(folded));
       if (rule) {
-        rule.apply(rule.test.exec(line)!, emit, line);
+        rule.apply(rule.test.exec(folded)!, emit, line);
         continue;
       }
       if (tryColumn(line, columns, emit)) continue;
       unrecognized.push(line);
     }
+    flushComorbidity();
     if (sexes.size === 1) patient.sex = [...sexes][0];
     else if (sexes.size > 1) {
       emit(DEMOGRAPHIC_COLUMNS.sex, null, 'Cinsiyet', 'kadın / erkek', 'Word’de hem kadın hem erkek yazıyor, yazılmadı');

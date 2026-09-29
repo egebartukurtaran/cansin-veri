@@ -71,12 +71,12 @@ function isEmpty(c: Cell | undefined) {
   return c === null || c === undefined || (typeof c === 'string' && c.trim() === '');
 }
 
-function sameValue(a: Cell, b: number | string, column: string): boolean {
+function sameValue(a: Cell, b: number | string): boolean {
   if (typeof a === 'number' && typeof b === 'number') {
     return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
   }
-  if (column === DEMOGRAPHIC_COLUMNS.name) return trUpper(String(a)) === trUpper(String(b));
-  return String(a).trim() === String(b).trim();
+  // Text: "ht, dm" and "HT, DM" mean the same thing.
+  return trUpper(String(a)) === trUpper(String(b));
 }
 
 function cellKey(v: number | string): string {
@@ -119,7 +119,7 @@ function resolve(column: string, cands: Candidate[], sav: SavFile, current: Cell
     const others = cands.filter((c) => !c.fromWord && c.value !== null);
     if (others.length > 0 && change.proposed !== null) {
       const pdf = resolveDated(column, others, sav, null);
-      if (pdf.proposed !== null && !sameValue(pdf.proposed, change.proposed, column)) {
+      if (pdf.proposed !== null && !sameValue(pdf.proposed, change.proposed)) {
         change.messages.push(`PDF'te ${displayValue(pdf.proposed)} (${pdf.fileName}) — Word'deki değer esas alındı`);
       }
     }
@@ -170,7 +170,7 @@ function resolveDated(column: string, cands: Candidate[], sav: SavFile, current:
 
   const distinct = new Map<string, Candidate>();
   for (const c of latest) {
-    const key = column === DEMOGRAPHIC_COLUMNS.name ? trUpper(String(c.value)) : cellKey(c.value!);
+    const key = typeof c.value === 'string' ? trUpper(c.value) : cellKey(c.value!);
     distinct.set(key, c);
   }
   if (distinct.size > 1) {
@@ -197,7 +197,7 @@ function resolveDated(column: string, cands: Candidate[], sav: SavFile, current:
   change.proposed = value;
 
   if (isEmpty(current)) change.status = 'write';
-  else if (sameValue(current, value, column)) change.status = 'same';
+  else if (sameValue(current, value)) change.status = 'same';
   else {
     change.status = 'conflict';
     change.messages.push(

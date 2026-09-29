@@ -146,6 +146,49 @@ describe('word notes', () => {
     expect(r.patient.sex).toBeNull();
   });
 
+  test('comorbidity written in different ways', () => {
+    const kom = (lines: string[]) => {
+      const [r] = parseWordLines(['AYŞE YILDIZ', 'Yaş: 60', ...lines], 'x.docx', COLUMNS);
+      const v = Object.fromEntries(r.observations.map((o) => [o.column, o.value]));
+      return { text: v.Komorbidite, ht: v.HTYok0Var1, dm: v.DMYok0Var1, kah: v.KAHYok0Var1, un: r.unrecognized };
+    };
+    expect(kom(['komorbid: HT, DM'])).toMatchObject({ text: 'HT, DM', ht: 1, dm: 1, kah: 0 });
+    expect(kom(['KOMORBİDİTE: HT, KAH'])).toMatchObject({ text: 'HT, KAH', ht: 1, dm: 0, kah: 1 });
+    expect(kom(['Komorbidite - HT, DM'])).toMatchObject({ text: 'HT, DM', ht: 1, dm: 1 });
+    expect(kom(['Komorbiditeler: Diyabet, hipertansiyon'])).toMatchObject({ ht: 1, dm: 1 });
+    expect(kom(['Ek hastalıklar: HT'])).toMatchObject({ text: 'HT', ht: 1 });
+    expect(kom(['EK HASTALIKLARI: DM'])).toMatchObject({ text: 'DM', dm: 1 });
+    expect(kom(['Özgeçmiş: DM, KAH'])).toMatchObject({ dm: 1, kah: 1 });
+    expect(kom(['Komorbidite: yok'])).toMatchObject({ text: undefined, ht: 0, dm: 0 });
+    // List on the following lines; stops at the next known line and does not swallow lab lines.
+    expect(kom(['Komorbidite:', '- HT', '- DM', '• Hipotiroidi', 'Kan Üre Azotu (BUN) - 21 mg/dL', 'Ef: 60'])).toEqual({
+      text: 'HT, DM, Hipotiroidi', ht: 1, dm: 1, kah: 0, un: ['Kan Üre Azotu (BUN) - 21 mg/dL'],
+    });
+  });
+
+  test('uppercase Turkish İ in other lines', () => {
+    const [r] = parseWordLines(
+      ['AYŞE YILDIZ', 'YAŞ: 60', 'SOL ATRİYUM 3,3', 'DİYASTOLİK DİSFONKSİYON YOK', 'KAPAK PATOLOJİSİ VAR: ESER MY'],
+      'x.docx',
+      COLUMNS,
+    );
+    const v = Object.fromEntries(r.observations.map((o) => [o.column, o.value]));
+    expect(v).toMatchObject({ Sol_atriyum_çapı: 3.3, Diyastolik_disfonksiyon: 0, Kapak_patolojisi: 1, Kapak_patolojisi_tipi: 'ESER MY' });
+    expect(r.unrecognized).toEqual([]);
+  });
+
+  test('comorbidity reaches the list; case differences are not conflicts', () => {
+    const sav = fakeSav([{ Adsoyad: 'AYŞE YILDIZ', DosyaNo: '555', Komorbidite: 'ht, dm' }, { Adsoyad: 'MEHMET KAYA', DosyaNo: '777' }]);
+    const plan = buildPlan(sav, [
+      ...parseWordLines(['AYŞE YILDIZ', 'Yaş: 60', 'Komorbidite: HT, DM'], 'a.docx', COLUMNS),
+      ...parseWordLines(['MEHMET KAYA', 'Yaş: 70', 'Ek hastalıklar: KOAH'], 'b.docx', COLUMNS),
+    ]);
+    const kom = (i: number) => plan.patients[i].changes.find((c) => c.column === 'Komorbidite')!;
+    expect(kom(0).status).toBe('same');
+    expect(kom(1).status).toBe('write');
+    expect(applyPlan(sav, plan).rows[1][5]).toBe('KOAH');
+  });
+
   test('helpers', () => {
     expect(parseTypedNumber('22.1')).toBe(22.1);
     expect(parseTypedNumber('1.492')).toBeNull();
